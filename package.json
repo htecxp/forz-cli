@@ -4,12 +4,6 @@
   "description": "A zero-dependency TypeScript CLI for app.forz.io",
   "main": "./dist/api/index.js",
   "types": "./dist/api/index.d.ts",
-  "homepage": "https://github.com/htecxp/forz-cli#readme",
-  "bugs": "https://github.com/htecxp/forz-cli/issues",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/htecxp/forz-cli.git"
-  },
   "author": "Hugo <info@nygts.com>",
   "license": "MIT",
   "private": false,
