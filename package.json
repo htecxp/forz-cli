@@ -1,6 +1,6 @@
 {
   "name": "forz-cli",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "A zero-dependency TypeScript CLI for app.forz.io",
   "main": "./dist/api/index.js",
   "types": "./dist/api/index.d.ts",
