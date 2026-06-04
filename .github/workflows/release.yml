@@ -1,0 +1,50 @@
+name: release
+
+# Publishes forz-cli to npm when a version tag is pushed, e.g.:
+#   npm version patch            # bumps package.json + creates the tag
+#   git push --follow-tags
+#
+# Requires an NPM_TOKEN repository secret (npm automation token with publish rights):
+#   Settings -> Secrets and variables -> Actions -> New repository secret
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # allow creating the GitHub Release
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Guard: the tag must match the version in package.json.
+      - name: Verify tag matches package.json version
+        run: |
+          PKG_VERSION="v$(node -p "require('./package.json').version")"
+          if [ "$PKG_VERSION" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${PKG_VERSION}"
+            exit 1
+          fi
+
+      # prepublishOnly runs `yarn build && yarn test` before the actual publish.
+      - name: Publish to npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        run: gh release create "${GITHUB_REF_NAME}" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

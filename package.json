@@ -4,16 +4,25 @@
   "description": "A zero-dependency TypeScript CLI for app.forz.io",
   "main": "./dist/api/index.js",
   "types": "./dist/api/index.d.ts",
-  "repository": "",
-  "author": "",
+  "homepage": "https://github.com/htecxp/forz-cli#readme",
+  "bugs": "https://github.com/htecxp/forz-cli/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/htecxp/forz-cli.git"
+  },
+  "author": "Hugo <info@nygts.com>",
   "license": "MIT",
   "private": false,
+  "engines": {
+    "node": ">=14"
+  },
   "scripts": {
     "build": "yarn clean && tsc",
     "clean": "rm -rf dist/",
     "test": "jest tests/",
     "lint": "eslint --max-warnings 0 src/ tests/",
-    "prettier": "prettier src/** tests/** README.md"
+    "prettier": "prettier src/** tests/** README.md",
+    "prepublishOnly": "yarn build && yarn test"
   },
   "bin": {
     "forz": "./bin/index.js"
