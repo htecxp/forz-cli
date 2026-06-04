@@ -1,11 +1,11 @@
 import { ForzClient } from '../../api'
+import * as config from '../config'
+import { HttpError } from '../http'
 
 const unwrap = (body: unknown): unknown =>
   body && typeof body === 'object' && 'data' in (body as Record<string, unknown>)
     ? (body as { data: unknown }).data
     : body
-import * as config from '../config'
-import { HttpError } from '../http'
 
 export interface ParsedArgs {
   positional: string[]
@@ -45,12 +45,9 @@ export const CRUD_RESOURCES = [
   'leads',
   'deals',
   'projects',
-  'inventory_locations',
-  'inventory_transfers',
-  'webhook_endpoints',
 ] as const
 
-/** Read-only lookups (list only). */
+/** Read-only lookups (list only, except `custom_field_definitions` which also supports `get`). */
 export const LOOKUPS = [
   'payment_terms',
   'tax_rates',
@@ -58,19 +55,12 @@ export const LOOKUPS = [
   'item_categories',
   'system_options',
   'labels',
-  'custom_field_templates',
-  'webhook_deliveries',
+  'statuses',
+  'custom_field_definitions',
 ] as const
 
-/** Special non-CRUD verbs keyed by resource. */
-export const SPECIAL_ACTIONS: Record<string, Array<{ verb: string; method: string; path: string }>> = {
-  inventory_transfers: [{ verb: 'complete', method: 'PATCH', path: 'complete' }],
-  webhook_endpoints: [
-    { verb: 'rotate-secret', method: 'POST', path: 'rotate_secret' },
-    { verb: 'test', method: 'POST', path: 'test' },
-  ],
-  webhook_deliveries: [{ verb: 'replay', method: 'POST', path: 'replay' }],
-}
+/** Lookups that additionally expose a `get <id>` endpoint. */
+export const GETTABLE_LOOKUPS = new Set(['custom_field_definitions'])
 
 const print = (value: unknown): void => {
   if (value === undefined) return
@@ -171,43 +161,28 @@ const dispatchResource = async (resource: string, args: ParsedArgs): Promise<voi
   const [verb, ...rest] = args.positional
   const c = await client()
 
-  // Lookups: list-only
+  // Lookups: list-only (plus `get <id>` for gettable lookups).
   if ((LOOKUPS as readonly string[]).includes(resource)) {
     const lookup = c.lookup(resource)
-    if (verb && verb !== 'list' && (resource === 'custom_field_templates' || resource === 'webhook_deliveries') && verb === 'get') {
+    if (verb === 'get' && GETTABLE_LOOKUPS.has(resource)) {
       const [id] = rest
       if (!id) throw new Error(`Usage: forz ${resource} get <id>`)
       const res = await c.raw(`/api/v2/${resource}/${encodeURIComponent(id)}`)
       print(unwrap(res.body))
       return
     }
-    if (verb && verb !== 'list' && SPECIAL_ACTIONS[resource]) {
-      // fall through to special-action handling below
-    } else {
-      printPage(await lookup.list(buildListParams(args)))
-      return
+    if (verb && verb !== 'list') {
+      throw new Error(`Unknown verb for ${resource}: ${verb}`)
     }
+    printPage(await lookup.list(buildListParams(args)))
+    return
   }
 
-  const isCrud = (CRUD_RESOURCES as readonly string[]).includes(resource)
-  if (!isCrud && !SPECIAL_ACTIONS[resource]) {
+  if (!(CRUD_RESOURCES as readonly string[]).includes(resource)) {
     throw new Error(`Unknown resource: ${resource}`)
   }
 
   const r = c.resource(resource)
-  const action = SPECIAL_ACTIONS[resource]?.find((a) => a.verb === verb)
-
-  if (action) {
-    const [id] = rest
-    if (!id) throw new Error(`Usage: forz ${resource} ${action.verb} <id> [--body JSON|@file]`)
-    const body = readBodyFlag(args.flags.body)
-    const res = await c.raw(`/api/v2/${resource}/${encodeURIComponent(id)}/${action.path}`, {
-      method: action.method,
-      body,
-    })
-    print(unwrap(res.body))
-    return
-  }
 
   switch (verb) {
     case undefined:
@@ -295,14 +270,8 @@ Top-level commands:
 Resources (full CRUD: list, get, create, update, delete):
   ${CRUD_RESOURCES.join(', ')}
 
-Lookups (list only):
+Lookups (list only; custom_field_definitions also supports \`get <id>\`):
   ${LOOKUPS.join(', ')}
-
-Special actions:
-  inventory_transfers complete <id>                Mark transfer complete (PATCH)
-  webhook_endpoints rotate-secret <id>             Rotate signing secret (POST)
-  webhook_endpoints test <id>                      Send endpoint.test event (POST)
-  webhook_deliveries replay <id>                   Replay a webhook delivery (POST)
 
 Examples:
   forz customers list --limit 50
@@ -310,11 +279,12 @@ Examples:
   forz jobs create --body @./new-job.json
   forz invoices create --body @./invoice.json     # auto-generates Idempotency-Key
   forz customers update <id> --if-match '"W/abc"' --body '{"name":"New"}'
+  forz custom_field_definitions get cfd_01J...
   forz raw /api/v2/system_options
 
 Conventions:
   - Mutations require --if-match <etag> (get the ETag from a prior \`get\`).
-  - Financial creates (invoices, sales_orders, inventory_transfers) auto-generate an Idempotency-Key;
+  - Financial creates (invoices, sales_orders) auto-generate an Idempotency-Key;
     override with --idempotency-key <uuid>.
   - List responses paginate via --cursor; --limit max 100 (default 25).
   - --filter.<key> <value> forwards arbitrary query params on list calls.
@@ -335,8 +305,7 @@ export const dispatch = async (argv: string[]): Promise<void> => {
 
   if (
     (CRUD_RESOURCES as readonly string[]).includes(cmd) ||
-    (LOOKUPS as readonly string[]).includes(cmd) ||
-    Object.prototype.hasOwnProperty.call(SPECIAL_ACTIONS, cmd)
+    (LOOKUPS as readonly string[]).includes(cmd)
   ) {
     return dispatchResource(cmd, args)
   }

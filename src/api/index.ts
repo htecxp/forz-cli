@@ -38,7 +38,7 @@ export interface Fetched<T> {
 }
 
 /** Resources that require an `Idempotency-Key` on POST (financial). */
-export const FINANCIAL_RESOURCES = new Set(['invoices', 'sales_orders', 'inventory_transfers'])
+export const FINANCIAL_RESOURCES = new Set(['invoices', 'sales_orders'])
 
 const parseLinkNextCursor = (link?: string): string | undefined => {
   if (!link) return undefined
@@ -135,7 +135,7 @@ export class Resource<T = Record<string, unknown>> {
     })
   }
 
-  /** Custom action endpoint, e.g. `inventory_transfers/{id}/complete`. */
+  /** Custom action endpoint, e.g. `<resource>/{id}/<action>`. */
   async action<R = T>(id: string, action: string, options: RequestOptions = {}): Promise<R> {
     const res = await this.client.raw<{ data: R } | R>(`${this.path(id)}/${action}`, {
       method: options.method || 'POST',
@@ -145,7 +145,7 @@ export class Resource<T = Record<string, unknown>> {
   }
 }
 
-/** Read-only list resource (e.g. lookups, custom field templates). */
+/** Read-only list resource (e.g. lookups, custom field definitions). */
 export class ListResource<T = Record<string, unknown>> {
   constructor(private readonly client: ForzClient, readonly name: string) {}
   async list(params: ListParams = {}): Promise<Page<T>> {

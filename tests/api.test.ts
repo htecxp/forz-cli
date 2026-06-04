@@ -1,12 +1,8 @@
 import { FINANCIAL_RESOURCES, ForzClient } from '../src/api'
 
 describe('FINANCIAL_RESOURCES', () => {
-  it('matches the three financial resources from the v2 spec', () => {
-    expect([...FINANCIAL_RESOURCES].sort()).toEqual([
-      'inventory_transfers',
-      'invoices',
-      'sales_orders',
-    ])
+  it('matches the financial resources from the v2 spec', () => {
+    expect([...FINANCIAL_RESOURCES].sort()).toEqual(['invoices', 'sales_orders'])
   })
 })
 

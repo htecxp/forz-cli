@@ -40,13 +40,13 @@ Credentials live in `~/.forz/config.json` (mode 0600).
 
 ## Resources
 
-| Group        | Resources                                                                                                                                                             |
-| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Full CRUD    | `customers`, `sites`, `contacts`, `jobs`, `estimates`, `invoices`, `sales_orders`, `items`, `tasks`, `leads`, `deals`, `projects`, `inventory_locations`, `inventory_transfers`, `webhook_endpoints` |
-| Lookups (RO) | `payment_terms`, `tax_rates`, `job_types`, `item_categories`, `system_options`, `labels`, `custom_field_templates`, `webhook_deliveries`                              |
-| Actions      | `inventory_transfers complete <id>`, `webhook_endpoints rotate-secret <id>`, `webhook_endpoints test <id>`, `webhook_deliveries replay <id>`                          |
+| Group        | Resources                                                                                                                          |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| Full CRUD    | `customers`, `sites`, `contacts`, `jobs`, `estimates`, `invoices`, `sales_orders`, `items`, `tasks`, `leads`, `deals`, `projects` |
+| Lookups (RO) | `payment_terms`, `tax_rates`, `job_types`, `item_categories`, `system_options`, `labels`, `statuses`, `custom_field_definitions`  |
 
-Each CRUD resource supports `list | get | create | update | delete`.
+Each CRUD resource supports `list | get | create | update | delete`. Lookups are list-only,
+except `custom_field_definitions`, which also supports `get <id>`.
 
 ## API conventions baked in
 
@@ -57,7 +57,7 @@ The CLI enforces the Forz v2 conventions automatically:
   the cursor for the next page on stderr when `has_more` is true.
 - **Optimistic concurrency:** `update` and `delete` require `--if-match <etag>`. Run `forz <resource> get <id>`
   first — the ETag is printed on stderr.
-- **Idempotency:** financial creates (`invoices`, `sales_orders`, `inventory_transfers`) auto-generate an
+- **Idempotency:** financial creates (`invoices`, `sales_orders`) auto-generate an
   `Idempotency-Key`; override with `--idempotency-key <uuid>`.
 - **Errors:** the CLI surfaces RFC 9457 `application/problem+json` bodies and the stable `code` field on
   non-2xx responses.
@@ -77,10 +77,7 @@ forz <resource> create --body JSON|@file|@-     # @- reads stdin
 forz <resource> update <id> --if-match <etag> --body JSON|@file
 forz <resource> delete <id> --if-match <etag>
 
-forz inventory_transfers complete <id>
-forz webhook_endpoints rotate-secret <id>
-forz webhook_endpoints test <id>
-forz webhook_deliveries replay <id>
+forz custom_field_definitions get <id>          # gettable lookup
 
 forz raw <path> [--method M] [--body J] [--header.<H> <V>]
 ```
