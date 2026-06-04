@@ -99,6 +99,25 @@ await client.resource('customers').update(customer.id, { name: 'New' }, { ifMatc
 await client.resource('invoices').create({ /* ... */ })  // Idempotency-Key auto-set
 ```
 
+## Use with Claude / AI agents
+
+This package ships an [Agent Skill](https://docs.claude.com/en/docs/agents-and-tools/agent-skills)
+that teaches Claude to drive the `forz` CLI correctly — the ETag/If-Match flow, idempotency
+on financial creates, cursor pagination, and RFC 9457 error handling. It's bundled at
+`skill/forz-cli/SKILL.md` (and as a packaged `skill/forz-cli.skill`).
+
+To install it for **Claude Code**:
+
+```
+# from a project that has forz-cli installed
+mkdir -p ~/.claude/skills/forz-cli
+cp node_modules/forz-cli/skill/forz-cli/SKILL.md ~/.claude/skills/forz-cli/
+```
+
+Then ask Claude things like "look up customer cust_01J… in Forz" or "create an invoice from
+invoice.json" and it will use the CLI following the platform's conventions. The skill defers
+to `forz help` for the authoritative command surface, so it stays correct across CLI updates.
+
 ## Development
 
 ```

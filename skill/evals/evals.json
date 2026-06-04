@@ -1,0 +1,26 @@
+{
+  "skill_name": "forz-cli",
+  "evals": [
+    {
+      "id": 0,
+      "name": "etag-update",
+      "prompt": "I need to update the billing email on our Forz customer cust_01J9ZK3 — change it to billing@acme.com.",
+      "expected_output": "Agent runs get first for the ETag, then update with --if-match.",
+      "files": []
+    },
+    {
+      "id": 1,
+      "name": "paginate-jobs",
+      "prompt": "Pull all the open jobs in Forz for customer cust_01ABC and save the full list to open-jobs.json.",
+      "expected_output": "Agent filters status=open, follows the cursor across pages, writes all jobs to open-jobs.json.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "idempotent-invoice",
+      "prompt": "Create an invoice in Forz from invoice.json for this customer. Heads up — I tried this earlier and the command timed out, so I'm not sure if it already went through. Whatever you do, don't double-bill them.",
+      "expected_output": "Agent checks for an existing invoice before creating, then creates; explains idempotency reasoning.",
+      "files": ["invoice.json"]
+    }
+  ]
+}

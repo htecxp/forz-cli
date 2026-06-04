@@ -3,3 +3,6 @@ node_modules
 
 # Compiled Code
 dist
+
+# Skill eval scaffolding (regenerable; keep SKILL.md, evals.json, and the .skill artifact)
+skill/forz-cli-workspace/
