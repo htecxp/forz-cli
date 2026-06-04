@@ -18,11 +18,12 @@ Then `npx forz <command>` or, if installed globally, `forz <command>`.
 
 ## Quick start
 
-1. Mint an API key in the Forz UI at **/settings/api_keys** (format: `fz_live_<UUIDv7>` or `fz_test_<UUIDv7>`).
+1. Mint an API key in the Forz UI at **/settings/api_keys** (format: `fz_<UUIDv7>`).
 2. Save it locally:
 
    ```
-   forz login --token fz_live_018f4c7e-9a2b-7f3a-bd9e-1a2b3c4d5e6f
+   forz login --token fz_018f4c7e-9a2b-7f3a-bd9e-1a2b3c4d5e6f
+   forz whoami     # confirm which account/user the key belongs to
    forz ping       # auth-check
    ```
 
@@ -52,7 +53,7 @@ except `custom_field_definitions`, which also supports `get <id>`.
 
 The CLI enforces the Forz v2 conventions automatically:
 
-- **Bearer auth** with `fz_(live|test)_<UUIDv7>` keys.
+- **Bearer auth** with `fz_<UUIDv7>` keys.
 - **Pagination** via HMAC-signed cursors. `--limit` is capped server-side at 100 (default 25). The CLI prints
   the cursor for the next page on stderr when `has_more` is true.
 - **Optimistic concurrency:** `update` and `delete` require `--if-match <etag>`. Run `forz <resource> get <id>`
@@ -65,8 +66,9 @@ The CLI enforces the Forz v2 conventions automatically:
 ## Common commands
 
 ```
-forz login --token fz_live_<uuid> [--base-url https://staging.forz.io]
+forz login --token fz_<uuid> [--base-url https://staging.forz.io]
 forz logout
+forz whoami                                     # confirm this key's account/user before mutating
 forz ping                                       # authenticated health check
 forz config show
 forz config set baseUrl https://staging.forz.io

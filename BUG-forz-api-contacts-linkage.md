@@ -25,7 +25,7 @@ The created contact should be persisted with the supplied `linkable_id` / `linka
 
 ```bash
 curl -X POST https://app.forz.io/api/v2/contacts \
-  -H "Authorization: Bearer fz_live_<…>" \
+  -H "Authorization: Bearer fz_<…>" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json" \
   -d '{

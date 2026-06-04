@@ -12,7 +12,7 @@ describe('ForzClient', () => {
   })
 
   it('exposes Resource and ListResource factories', () => {
-    const client = new ForzClient({ token: 'fz_test_x' })
+    const client = new ForzClient({ token: 'fz_x' })
     expect(client.resource('customers').name).toBe('customers')
     expect(client.lookup('job_types').name).toBe('job_types')
   })

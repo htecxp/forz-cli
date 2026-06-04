@@ -5,7 +5,7 @@ import path from 'path'
 export interface Config {
   /** API base URL — defaults to https://app.forz.io (staging: https://staging.forz.io). */
   baseUrl: string
-  /** API key in the form `fz_(live|test)_<UUIDv7>` (Bearer token). */
+  /** API key in the form `fz_<UUIDv7>` (Bearer token). */
   token?: string
 }
 

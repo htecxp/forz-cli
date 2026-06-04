@@ -163,8 +163,8 @@ export class ListResource<T = Record<string, unknown>> {
 /**
  * Client for the Forz Public API v2 (https://app.forz.io).
  *
- * Authenticates with a Bearer API key in the form `fz_(live|test)_<UUIDv7>`,
- * minted at /settings/api_keys.
+ * Authenticates with a Bearer API key in the form `fz_<UUIDv7>`, minted at
+ * /settings/api_keys.
  */
 export class ForzClient {
   readonly baseUrl: string
