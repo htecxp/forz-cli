@@ -25,6 +25,7 @@
     "dist/**/*",
     "bin/index.js",
     "skill/forz-cli/SKILL.md",
+    "skill/forz-cli/AGENTS.md",
     "skill/forz-cli.skill"
   ],
   "keywords": [

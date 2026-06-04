@@ -99,24 +99,31 @@ await client.resource('customers').update(customer.id, { name: 'New' }, { ifMatc
 await client.resource('invoices').create({ /* ... */ })  // Idempotency-Key auto-set
 ```
 
-## Use with Claude / AI agents
+## Use with Claude Code, Codex & other AI agents
 
-This package ships an [Agent Skill](https://docs.claude.com/en/docs/agents-and-tools/agent-skills)
-that teaches Claude to drive the `forz` CLI correctly — the ETag/If-Match flow, idempotency
-on financial creates, cursor pagination, and RFC 9457 error handling. It's bundled at
-`skill/forz-cli/SKILL.md` (and as a packaged `skill/forz-cli.skill`).
+This package ships agent instructions that teach a coding agent to drive the `forz` CLI
+correctly — the ETag/If-Match flow, idempotency on financial creates, cursor pagination, and
+RFC 9457 error handling. The same guidance is provided in two formats (`SKILL.md` is the
+source of truth; `AGENTS.md` is generated from it):
 
-To install it for **Claude Code**:
+| Agent | File | Install |
+| ----- | ---- | ------- |
+| **Claude Code** | `skill/forz-cli/SKILL.md` (+ packaged `skill/forz-cli.skill`) | copy into `~/.claude/skills/forz-cli/` |
+| **OpenAI Codex** (and other [`AGENTS.md`](https://agents.md)-compatible agents) | `skill/forz-cli/AGENTS.md` | append to your project's `AGENTS.md` or `~/.codex/AGENTS.md` |
 
 ```
-# from a project that has forz-cli installed
+# Claude Code — install as a skill
 mkdir -p ~/.claude/skills/forz-cli
 cp node_modules/forz-cli/skill/forz-cli/SKILL.md ~/.claude/skills/forz-cli/
+
+# OpenAI Codex — append the instructions to your AGENTS.md
+cat node_modules/forz-cli/skill/forz-cli/AGENTS.md >> AGENTS.md   # or ~/.codex/AGENTS.md
 ```
 
-Then ask Claude things like "look up customer cust_01J… in Forz" or "create an invoice from
-invoice.json" and it will use the CLI following the platform's conventions. The skill defers
-to `forz help` for the authoritative command surface, so it stays correct across CLI updates.
+Then ask the agent things like "look up customer cust_01J… in Forz" or "create an invoice
+from invoice.json" and it will use the CLI following the platform's conventions. The
+instructions defer to `forz help` for the authoritative command surface, so they stay correct
+across CLI updates. Both formats are kept in sync by `skill/sync-skill-docs.sh`.
 
 ## Development
 
