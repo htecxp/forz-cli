@@ -7,6 +7,24 @@ const unwrap = (body: unknown): unknown =>
     ? (body as { data: unknown }).data
     : body
 
+/** Shape of the GET /api/v2/me payload (after `unwrap`). */
+export interface MeIdentity {
+  account?: { id?: number; name?: string } | null
+  user?: { id?: number; name?: string; email?: string } | null
+  api_key?: { id?: string; scopes?: string[] } | null
+  api_version?: string | null
+}
+
+/**
+ * One-line stderr summary for `forz whoami`. There is a single environment, so
+ * the line is "# connected to <account name> as <email>" — no (env) segment.
+ */
+export const whoamiSummary = (me: MeIdentity): string => {
+  const account = me?.account?.name ?? 'unknown account'
+  const email = me?.user?.email ?? 'unknown user'
+  return `# connected to ${account} as ${email}`
+}
+
 export interface ParsedArgs {
   positional: string[]
   flags: Record<string, string | boolean>
@@ -114,10 +132,10 @@ const login = async (args: ParsedArgs): Promise<void> => {
   const token = typeof args.flags.token === 'string' ? args.flags.token : undefined
   const baseUrl = typeof args.flags['base-url'] === 'string' ? args.flags['base-url'] : undefined
   if (!token) {
-    throw new Error('Missing --token. Mint a key at /settings/api_keys, then run:\n  forz login --token fz_live_<uuid>')
+    throw new Error('Missing --token. Mint a key at /settings/api_keys, then run:\n  forz login --token fz_<uuid>')
   }
-  if (!/^fz_(live|test)_[0-9a-fA-F-]{36}$/.test(token)) {
-    console.error(`# warning: token does not match expected format fz_(live|test)_<UUIDv7>`)
+  if (!/^fz_[0-9a-fA-F-]{36}$/.test(token)) {
+    console.error(`# warning: token does not match expected format fz_<UUIDv7>`)
   }
   const next = await config.update({ token, ...(baseUrl ? { baseUrl } : {}) })
   console.log(`Saved credentials to ${config.configPath()}`)
@@ -137,6 +155,17 @@ const ping = async (): Promise<void> => {
   const remaining = res.headers['ratelimit-remaining']
   console.log(`OK — HTTP ${res.status} from ${c.baseUrl}`)
   if (limit && remaining) console.log(`RateLimit: ${remaining}/${limit} remaining`)
+}
+
+// `forz whoami` — confirm which account/user this key belongs to before mutating.
+// JSON payload to stdout (pipeable: `forz whoami | jq .account`); a single human
+// summary line to stderr so it never pollutes the JSON.
+const whoami = async (): Promise<void> => {
+  const c = await client()
+  const res = await c.raw('/api/v2/me')
+  const me = unwrap(res.body) as MeIdentity
+  print(me)
+  console.error(whoamiSummary(me))
 }
 
 const configCmd = async (args: ParsedArgs): Promise<void> => {
@@ -259,9 +288,10 @@ Usage:
   forz <resource> <verb> [args] [--flag value]
 
 Top-level commands:
-  login --token fz_live_<uuid> [--base-url URL]   Save API credentials
+  login --token fz_<uuid> [--base-url URL]         Save API credentials
   logout                                           Clear stored credentials
   ping                                             Authenticated health check
+  whoami                                           Show the account/user this key belongs to
   config [show]                                    Print current config (token redacted)
   config set <key> <value>                         Update a config value
   raw <path> [--method M] [--body J] [--header K=V] Call any v2 path
@@ -274,6 +304,7 @@ Lookups (list only; custom_field_definitions also supports \`get <id>\`):
   ${LOOKUPS.join(', ')}
 
 Examples:
+  forz whoami                                     # confirm this key's account before mutating
   forz customers list --limit 50
   forz customers get cust_01J...
   forz jobs create --body @./new-job.json
@@ -300,6 +331,7 @@ export const dispatch = async (argv: string[]): Promise<void> => {
   if (cmd === 'login') return login(args)
   if (cmd === 'logout') return logout()
   if (cmd === 'ping') return ping()
+  if (cmd === 'whoami') return whoami()
   if (cmd === 'config') return configCmd(args)
   if (cmd === 'raw') return raw(args)
 

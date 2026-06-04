@@ -17,12 +17,13 @@ it is the source of truth and reflects the API version the installed CLI targets
 
 ```
 forz help        # is the CLI installed? shows the full command surface
+forz whoami      # which account/user is this key bound to? (JSON to stdout)
 forz ping        # authenticated? prints "OK" + your rate-limit budget
 ```
 
 - Not installed → `npm install -g forz-cli` (or prefix every command with `npx`, e.g. `npx forz ping`).
-- Not authenticated → `forz login --token fz_live_<uuid>` (keys are minted in the Forz UI at `/settings/api_keys`; format `fz_(live|test)_<UUIDv7>`). Credentials live in `~/.forz/config.json`.
-- Use a `fz_test_` key against test data while figuring out a workflow, then switch to `fz_live_`.
+- Not authenticated → `forz login --token fz_<uuid>` (keys are minted in the Forz UI at `/settings/api_keys`; format `fz_<UUIDv7>`). Credentials live in `~/.forz/config.json`.
+- Before any create/update/delete, run `forz whoami` to confirm you're connected to the intended account — every write hits the real tenant (there is a single environment, so there is no "test mode" to fall back on).
 
 Never paste a token into a command the user can see logged if you can avoid it — prefer that the user runs `forz login` themselves. If you must, treat the key like a password.
 
@@ -34,6 +35,7 @@ Never paste a token into a command the user can see logged if you can avoid it �
 - **stderr** = side-channel hints that are *not* part of the data:
   - after `get`: `# ETag: "<value>"` — you need this for the next update/delete.
   - after `list`: `# more available — re-run with --cursor <c>` — there are more pages.
+  - after `whoami`: `# connected to <account> as <email>` — a human summary; parse the JSON on stdout, never this line.
 
 So `forz customers get cust_01J... > customer.json` captures clean JSON, and the ETag still shows up in your terminal. When you need the ETag programmatically, read it from stderr — don't try to parse it out of stdout, it isn't there.
 
@@ -170,4 +172,4 @@ Look up valid `job_type_id` / `tax_rate` / `payment_term` values from the matchi
 - When a task needs an id you don't have, `list` (with a `--filter` if you can) to find it before acting.
 - Prefer the typed commands over `raw`; reach for `raw` only when no command fits.
 - Capture stdout to a file or `jq` it for the data; watch stderr for ETags and pagination cursors.
-- Mutations are real writes against the user's account — confirm destructive actions (`delete`, bulk updates) before running them, and prefer a `fz_test_` key while iterating.
+- Mutations are real writes against the user's account — there is a single environment (no test mode), so run `forz whoami` to confirm the target account first and confirm destructive actions (`delete`, bulk updates) before running them.
