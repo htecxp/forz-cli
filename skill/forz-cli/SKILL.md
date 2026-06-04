@@ -5,7 +5,8 @@ description: >-
   `forz` CLI (npm package `forz-cli`, Forz Public API v2). Use this skill whenever the
   user wants to read or modify Forz data — customers, sites, contacts, jobs, estimates,
   invoices, sales orders, items, tasks, leads, deals, or projects — or mentions Forz,
-  forz.io, field-service jobs/dispatch, or an `fz_live_`/`fz_test_` API key. It covers
+  forz.io, field-service jobs/dispatch, an `fz_live_`/`fz_test_` API key, or a bare Forz
+  record id like `cust_…`/`job_…`. It covers
   the conventions that are easy to get wrong: the ETag/If-Match flow on updates and
   deletes, idempotency keys on invoices and sales orders, cursor pagination, JSON body
   input, and RFC 9457 error handling. Reach for it even when the user says "look up a

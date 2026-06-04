@@ -6,3 +6,6 @@ dist
 
 # Skill eval scaffolding (regenerable; keep SKILL.md, evals.json, and the .skill artifact)
 skill/forz-cli-workspace/
+
+# Description-optimization scaffolding (regenerable)
+skill/optimize/
