@@ -53,9 +53,6 @@ const parseLinkNextCursor = (link?: string): string | undefined => {
   }
 }
 
-/** Strips quotes from an `ETag` header value if present. */
-const cleanEtag = (raw?: string): string | undefined => raw
-
 /** Unwrap the `{data: ...}` envelope every Forz v2 response uses. */
 const unwrap = <T>(body: unknown): T => {
   if (body && typeof body === 'object' && 'data' in (body as Record<string, unknown>)) {
@@ -91,7 +88,9 @@ export class Resource<T = Record<string, unknown>> {
 
   async get(id: string): Promise<Fetched<T>> {
     const res = await this.client.raw<{ data: T } | T>(this.path(id))
-    return { data: unwrap<T>(res.body), etag: cleanEtag(res.headers.etag as string | undefined) }
+    // ETag is returned verbatim so it can be passed straight back as If-Match — the
+    // weak-ETag form W/"<epoch>-<lock_version>" (quotes included) must not be altered.
+    return { data: unwrap<T>(res.body), etag: res.headers.etag as string | undefined }
   }
 
   async create(input: Partial<T>, options: MutationOptions = {}): Promise<T> {
@@ -133,15 +132,6 @@ export class Resource<T = Record<string, unknown>> {
       method: 'DELETE',
       headers: { 'If-Match': options.ifMatch },
     })
-  }
-
-  /** Custom action endpoint, e.g. `<resource>/{id}/<action>`. */
-  async action<R = T>(id: string, action: string, options: RequestOptions = {}): Promise<R> {
-    const res = await this.client.raw<{ data: R } | R>(`${this.path(id)}/${action}`, {
-      method: options.method || 'POST',
-      ...options,
-    })
-    return unwrap<R>(res.body)
   }
 }
 

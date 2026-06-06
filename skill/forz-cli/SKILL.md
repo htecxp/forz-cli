@@ -6,7 +6,7 @@ description: >-
   user wants to read or modify Forz data — customers, sites, contacts, jobs, estimates,
   invoices, sales orders, items, tasks, leads, deals, or projects — or mentions Forz,
   forz.io, field-service jobs/dispatch, an `fz_…` API key, or a bare Forz
-  record id like `cust_…`/`job_…`. It covers
+  record id (a UUID, or a `customer_…`/`job_…` TypeID). It covers
   the conventions that are easy to get wrong: the ETag/If-Match flow on updates and
   deletes, idempotency keys on invoices and sales orders, cursor pagination, JSON body
   input, and RFC 9457 error handling. Reach for it even when the user says "look up a
@@ -40,11 +40,11 @@ Never paste a token into a command the user can see logged if you can avoid it �
 
 - **stdout** = the JSON payload (an object for `get`/`create`/`update`, an array for `list`).
 - **stderr** = side-channel hints that are *not* part of the data:
-  - after `get`: `# ETag: "<value>"` — you need this for the next update/delete.
+  - after `get`: `# ETag: W/"1745596800-3"` — you need this for the next update/delete.
   - after `list`: `# more available — re-run with --cursor <c>` — there are more pages.
   - after `whoami`: `# connected to <account> as <email>` — a human summary; parse the JSON on stdout, never this line.
 
-So `forz customers get cust_01J... > customer.json` captures clean JSON, and the ETag still shows up in your terminal. When you need the ETag programmatically, read it from stderr — don't try to parse it out of stdout, it isn't there.
+So `forz customers get 0190a1b2-9c3d-7e4f-8a1b-2c3d4e5f6071 > customer.json` captures clean JSON, and the ETag still shows up in your terminal. When you need the ETag programmatically, read it from stderr — don't try to parse it out of stdout, it isn't there.
 
 ## The ETag / If-Match flow (the #1 thing to get right)
 
@@ -53,14 +53,15 @@ refuse to run without `--if-match <etag>`**. This prevents you from blindly over
 change someone else made. The flow is always **get → use the ETag → mutate**:
 
 ```
-forz customers get cust_01J9Z...
-# stderr prints:  # ETag: "W/a1b2c3"
-forz customers update cust_01J9Z... --if-match '"W/a1b2c3"' --body '{"name":"New Name"}'
+forz customers get 0190a1b2-9c3d-7e4f-8a1b-2c3d4e5f6071
+# stderr prints:  # ETag: W/"1745596800-3"
+forz customers update 0190a1b2-9c3d-7e4f-8a1b-2c3d4e5f6071 --if-match 'W/"1745596800-3"' --body '{"organization":"New Name"}'
 ```
 
 Notes that save debugging time:
-- Pass the ETag **exactly** as printed, quotes and all. Wrap it in single quotes in the shell so the inner double-quotes survive: `--if-match '"W/a1b2c3"'`.
-- A `412 Precondition Failed` means the record changed since your `get` — re-`get` to obtain the fresh ETag, reconcile, and retry. Don't loop blindly.
+- The ETag is a **weak ETag** of the form `W/"<epoch>-<lock_version>"` (e.g. `W/"1745596800-3"`). Pass it **exactly** as printed — the double quotes belong *after* the `W/` prefix. Wrap the whole token in single quotes so the embedded double-quotes survive: `--if-match 'W/"1745596800-3"'`. Don't add an extra outer pair of quotes.
+- A `412 Precondition Failed` (`precondition.failed`) means the record changed since your `get` — re-`get` to obtain the fresh ETag, reconcile, and retry. Don't loop blindly.
+- Omitting `--if-match` is caught locally by the typed commands; via `forz raw`, a PATCH/DELETE with no `If-Match` returns `428 Precondition Required` (`precondition.required`).
 - `delete` needs the ETag too: `forz customers delete <id> --if-match '<etag>'`.
 - `update` is a PATCH (partial) — send only the fields you're changing, not the whole object.
 
@@ -87,8 +88,10 @@ it went through. The safe pattern depends on whether you controlled the key:
 The lesson: for any financial create you might need to retry, **control the key yourself**
 from the first attempt so a retry is provably safe. Non-financial creates (customers,
 jobs, …) don't require a key; pass `--idempotency-key` only when you want the same safety.
+Reusing a key with a **different body** returns `409 idempotency_key.in_use`; omitting it on a
+financial create (only reachable via `forz raw`) returns `400 idempotency_key.required`.
 
-## Pagination
+## Pagination, filtering & sorting
 
 `list` returns one page: default 25 rows, max `--limit 100`. When more exist, the cursor
 is printed on stderr. To walk everything, follow the cursor until it stops appearing:
@@ -98,25 +101,40 @@ forz jobs list --limit 100
 forz jobs list --limit 100 --cursor <cursor-from-stderr>
 ```
 
-Filter server-side with `--filter.<key> <value>` (forwarded as raw query params), e.g.
-`forz jobs list --filter.status open --filter.customer_id cust_01J...`. Available filter
-keys are per-resource — when unsure, check the Forz API docs or try one and read the error.
+Narrow and order results server-side. Each list endpoint **allow-lists its own fields**:
+
+- `--sort <field>` — ascending by default; for descending use the `=` form, e.g. `--sort=-created_at` (a leading `-` in the value needs `--sort=…`, not a space). Honored on the first page; the cursor fixes the order on continuation pages.
+- `--q <text>` — free-text search.
+- `--filter.<key> <value>` — equality, e.g. `--filter.status Open`. Range/set operators: `--filter.created_at[gte] 2026-01-01T00:00:00Z`, `--filter.status[in] Open,Closed` (operators: `gte|lte|gt|lt|ne|in`).
+
+Common allow-lists: `customers` → `q,sort,organization,number,status,created_at`;
+`invoices` → `q,sort,customer_id,number,status,invoice_date,due_date`;
+`jobs`/`leads`/`deals`/`estimates`/`projects`/`sales_orders`/`tasks` →
+`q,sort,created_at,updated_at,status`. An unknown field returns `400 filter.invalid` /
+`sort.invalid`; changing a filter, sort, or `q` mid-pagination invalidates the cursor
+(`cursor.invalid_filters`). Status values are the tenant's own labels — list them with
+`forz statuses list` when unsure.
 
 ## Body input
 
 Anywhere a `--body` is accepted you can pass JSON three ways:
 
-- inline: `--body '{"name":"Acme"}'`
+- inline: `--body '{"organization":"Acme"}'`
 - from a file: `--body @./new-customer.json`
 - from stdin: `--body @-` (e.g. `cat job.json | forz jobs create --body @-`, or pipe from `jq`)
 
 ## Errors
 
-Non-2xx responses are RFC 9457 `application/problem+json` with a **stable `code` field**.
-Branch on `code`, not on the human-readable message (messages change, codes don't). The
-CLI surfaces the status, code, and body, e.g. `HTTP 422 [validation_error]: ...`. Common
-ones: `validation_error` (fix the body), `not_found` (bad id), `precondition_failed`
-(stale ETag — re-get), `rate_limited` (back off; `forz ping` shows your budget).
+Non-2xx responses are RFC 9457 `application/problem+json` with a **stable `code` field**
+in dotted snake_case (e.g. `validation.failed`). Branch on `code`, not on the
+human-readable message (messages change, codes don't). The CLI surfaces the status, code,
+and body, e.g. `HTTP 422 [validation.failed]: ...`. Common ones:
+
+- `validation.failed` (fix the body), `resource.not_found` (bad id).
+- `precondition.failed` (412 — stale ETag, re-`get`), `precondition.required` (428 — missing `--if-match`, only via `raw`).
+- `rate_limit.exceeded` (429 — back off; `forz ping` shows your budget).
+- `idempotency_key.required` / `idempotency_key.in_use` (409 — same key, different body).
+- `pagination.limit_too_large` (`--limit` > 100), `sort.invalid`, `filter.invalid`, `cursor.invalid` / `cursor.expired` / `cursor.invalid_filters`, `number.immutable`.
 
 ## Resource map
 
@@ -130,6 +148,11 @@ Run `forz help` for the authoritative list. As of API version **2026-04-30**:
   `labels`, `statuses`, `custom_field_definitions`.
   - `custom_field_definitions` is the one lookup that also supports `get <id>`.
 
+Record ids are **UUID v7** strings on the wire (e.g. `0190a1b2-9c3d-7e4f-8a1b-2c3d4e5f6071`)
+— that's what you pass to `get`/`update`/`delete` and to id filters like `--filter.customer_id`.
+(The API also exposes a `customer_…`/`job_…`/`site_…` TypeID form in logs and cross-system
+references, but the accepted wire id is the raw UUID.)
+
 The resource set is **pinned to the API version the CLI was built against**. If a command
 errors with "Unknown resource/command", trust `forz help` over memory — the surface may
 have changed between releases.
@@ -140,18 +163,18 @@ For anything the typed commands don't cover, call the API directly:
 
 ```
 forz raw /api/v2/system_options
-forz raw /api/v2/customers --method POST --body @c.json --header.Idempotency-Key <uuid>
+forz raw /api/v2/customers --method POST --body @c.json --header.Idempotency-Key <key>
 ```
 
 `raw` prints the response body verbatim and lets you set arbitrary headers via
-`--header.<Name> <value>`.
+`--header.<Name> <value>` (e.g. `--header.If-Match 'W/"1745596800-3"'` on a raw PATCH/DELETE).
 
 ## Task recipes
 
-**Safely rename a customer (get → update):**
+**Rename a customer (the display field is `organization`):**
 ```
-forz customers get cust_01J9Z...                       # note the # ETag: line on stderr
-forz customers update cust_01J9Z... --if-match '"<etag>"' --body '{"name":"Acme Corp"}'
+forz customers get 0190a1b2-9c3d-7e4f-8a1b-2c3d4e5f6071     # note the # ETag: line on stderr
+forz customers update 0190a1b2-9c3d-7e4f-8a1b-2c3d4e5f6071 --if-match '<etag>' --body '{"organization":"Acme Corp"}'
 ```
 
 **Create an invoice (financial — idempotency is automatic):**
@@ -161,18 +184,19 @@ forz invoices create --body @invoice.json              # Idempotency-Key auto-se
 
 **Walk every open job:**
 ```
-forz jobs list --limit 100 --filter.status open
+forz jobs list --limit 100 --filter.status Open
 # while stderr shows a cursor, repeat with --cursor <c> and collect the stdout arrays
 ```
 
 **Stand up a customer → site → job chain:**
 ```
-forz customers create --body '{"name":"Acme"}'         # capture the returned id from stdout
-forz sites create     --body '{"customer_id":"<id>","address":"..."}'
-forz jobs create      --body '{"site_id":"<site_id>","job_type_id":"...","summary":"..."}'
+forz customers create --body '{"organization":"Acme"}'                                   # capture the returned id (a UUID) from stdout
+forz sites create     --body '{"site_name":"HQ","street":"123 Main St","city":"Austin","state":"TX","siteable_type":"Customer","siteable_id":"<customer-id>"}'
+forz jobs create      --body '{"customer_id":"<customer-id>","site_id":"<site-id>","title":"Annual service","job_type":"Service Call"}'
 ```
-Look up valid `job_type_id` / `tax_rate` / `payment_term` values from the matching lookup
-(`forz job_types list`, etc.) before referencing them.
+Look up valid `job_type` / `tax_rate` / `payment_term` values from the matching lookup
+(`forz job_types list`, etc.) before referencing them — `job_type` is the JobType's
+display name, not an id.
 
 ## Working style
 
