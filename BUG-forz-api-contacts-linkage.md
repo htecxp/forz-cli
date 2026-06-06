@@ -4,6 +4,12 @@
 **Endpoint:** `POST /api/v2/contacts`
 **Severity:** High — documented linkage feature is non-functional. Contacts created via the public API are orphaned and **cannot be re-linked** (per `ContactUpdateInput` description: "`linkable_*` is set-once at create — re-link is not yet exposed via v2").
 
+> **Historical note (re-checked 2026-06):** this report predates the integer→UUID v7 id
+> migration — the integer ids in the reproduction below are historical. The current spec
+> types `linkable_id` as a `string` (UUID v7) and still documents it on `ContactCreateInput`.
+> The runtime *silent-drop* behaviour has **not** been re-confirmed against the live API
+> since; re-verify before acting on it.
+
 ## Expected behavior
 
 Per `ContactCreateInput` in the OpenAPI spec:
@@ -11,7 +17,7 @@ Per `ContactCreateInput` in the OpenAPI spec:
 > "Pass `linkable_id` + `linkable_type` to attach the contact to a Customer / Lead / Site as the primary linkage in the same request."
 
 ```
-linkable_id    integer (int64)              Parent record ID to attach to.
+linkable_id    string (uuid, UUID v7)       Parent record ID to attach to.
 linkable_type  enum: Customer|Lead|Site     Parent record class name.
 ```
 

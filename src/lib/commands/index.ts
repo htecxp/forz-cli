@@ -1,3 +1,5 @@
+import { readFileSync } from 'fs'
+
 import { ForzClient } from '../../api'
 import * as config from '../config'
 import { HttpError } from '../http'
@@ -96,9 +98,8 @@ const printPage = (page: { data: unknown[]; hasMore: boolean; nextCursor?: strin
 const readBodyFlag = (raw: string | boolean | undefined): unknown => {
   if (raw === undefined || raw === true || raw === false) return undefined
   if (raw.startsWith('@')) {
-    const fs = require('fs') as typeof import('fs')
     const path = raw.slice(1)
-    const text = path === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(path, 'utf8')
+    const text = path === '-' ? readFileSync(0, 'utf8') : readFileSync(path, 'utf8')
     return JSON.parse(text)
   }
   return JSON.parse(raw)
@@ -110,10 +111,14 @@ const buildListParams = (
   const params: Record<string, string | number | boolean | undefined> = {}
   if (typeof args.flags.cursor === 'string') params.cursor = args.flags.cursor
   if (typeof args.flags.limit === 'string') params.limit = Number(args.flags.limit)
-  // Forward any --filter[key]=value style filters as raw query params.
+  // First-class sort + free-text search (allowed on every CRUD list endpoint).
+  if (typeof args.flags.sort === 'string') params.sort = args.flags.sort
+  if (typeof args.flags.q === 'string') params.q = args.flags.q
+  // Forward any --filter.<key> <value> filters as raw query params, e.g.
+  // `--filter.status Open` or `--filter.created_at[gte] 2026-01-01T00:00:00Z`.
   for (const [k, v] of Object.entries(args.flags)) {
-    if (k === 'cursor' || k === 'limit') continue
-    if (k.startsWith('filter.')) params[k.slice('filter.'.length)] = typeof v === 'boolean' ? v : v
+    if (k === 'cursor' || k === 'limit' || k === 'sort' || k === 'q') continue
+    if (k.startsWith('filter.')) params[k.slice('filter.'.length)] = v
   }
   return params
 }
@@ -305,20 +310,26 @@ Lookups (list only; custom_field_definitions also supports \`get <id>\`):
 
 Examples:
   forz whoami                                     # confirm this key's account before mutating
-  forz customers list --limit 50
-  forz customers get cust_01J...
+  forz customers list --limit 50 --sort=-created_at
+  forz customers list --q "acme" --filter.status Open
+  forz customers get 0190a1b2-9c3d-7e4f-8a1b-2c3d4e5f6071
   forz jobs create --body @./new-job.json
   forz invoices create --body @./invoice.json     # auto-generates Idempotency-Key
-  forz customers update <id> --if-match '"W/abc"' --body '{"name":"New"}'
-  forz custom_field_definitions get cfd_01J...
+  forz customers update <id> --if-match 'W/"1745596800-3"' --body '{"organization":"Acme Inc"}'
+  forz custom_field_definitions get 0190a1b2-9c3d-7e4f-8a1b-2c3d4e5f6071
   forz raw /api/v2/system_options
 
 Conventions:
-  - Mutations require --if-match <etag> (get the ETag from a prior \`get\`).
+  - Record ids are UUIDs (e.g. 0190a1b2-9c3d-7e4f-8a1b-2c3d4e5f6071).
+  - Mutations require --if-match <etag> (get the ETag from a prior \`get\`); the value is a
+    weak ETag like W/"1745596800-3" — quote it whole in the shell: --if-match 'W/"1745596800-3"'.
   - Financial creates (invoices, sales_orders) auto-generate an Idempotency-Key;
-    override with --idempotency-key <uuid>.
+    override with --idempotency-key <key>.
   - List responses paginate via --cursor; --limit max 100 (default 25).
-  - --filter.<key> <value> forwards arbitrary query params on list calls.
+  - List filtering/sorting/search (per-endpoint allow-list): --sort <field> ascending
+    (--sort=-<field> for descending), --q <text> free-text, and --filter.<key> <value> with
+    operators --filter.<key>[gte|lte|gt|lt|ne|in] <value>.
+  - Errors are RFC 9457 problem+json with a stable dotted \`code\` (e.g. validation.failed).
   - Config file: ~/.forz/config.json
 `)
 }
