@@ -148,6 +148,14 @@ Run `forz help` for the authoritative list. As of API version **2026-04-30**:
   `labels`, `statuses`, `custom_field_definitions`.
   - `custom_field_definitions` is the one lookup that also supports `get <id>`.
 
+**Known server-side gap — `contacts` linkage.** The spec advertises `linkable_id` +
+`linkable_type` on contact create, but the server has been seen returning `201` with both
+nulled, leaving the contact orphaned with no way to attach it later (`PATCH` rejects the
+same fields with `400`). `forz contacts create` prints a `# warning:` line on stderr when
+the linkage you asked for is missing from the response — **watch stderr on this call**, since
+the exit code is zero and stdout looks like a normal success. If you need a contact attached
+to a customer, verify the created record's `linkable_id` before moving on.
+
 Record ids are **UUID v7** strings on the wire (e.g. `0190a1b2-9c3d-7e4f-8a1b-2c3d4e5f6071`)
 — that's what you pass to `get`/`update`/`delete` and to id filters like `--filter.customer_id`.
 (The API also exposes a `customer_…`/`job_…`/`site_…` TypeID form in logs and cross-system

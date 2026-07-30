@@ -17,6 +17,20 @@ to Forz.
 
 Anyone trying `forz contacts create --body '{"linkable_id":…, "linkable_type":"Customer", …}'`
 will get an orphaned contact with no error and no way to attach it through the
-public API. Worth documenting until Forz fixes it server-side — e.g. a note in
-README's `contacts` row, or a runtime warning when the response contains a
-nulled `linkable_*` after the request explicitly set it.
+public API.
+
+**Handled (client-side) as of `feat/contacts-linkage-warning`:**
+
+- `linkageWarning()` in `src/lib/commands` compares the linkage fields the request
+  set against the created record, and `forz contacts create` prints a `# warning:`
+  line on stderr when they came back null or absent. stdout stays clean JSON and
+  the exit code stays zero — the server returned `201`, so this is a caveat, not
+  an error.
+- Documented in README's Resources section and in `skill/forz-cli/SKILL.md`
+  (regenerate `AGENTS.md` via `skill/sync-skill-docs.sh` after editing SKILL.md).
+
+The check keys off the *symptom* in the response, not off a hardcoded assumption
+that the server is broken, so it stops firing by itself once Forz starts echoing
+the linkage back — no client release needed. Note that the silent-drop behaviour
+has not been re-confirmed against the live API since the integer→UUID v7 id
+migration; re-verify before escalating the bug report again.

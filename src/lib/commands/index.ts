@@ -27,6 +27,54 @@ export const whoamiSummary = (me: MeIdentity): string => {
   return `# connected to ${account} as ${email}`
 }
 
+/**
+ * Polymorphic linkage fields `POST /api/v2/contacts` documents on
+ * `ContactCreateInput` for attaching a contact to a Customer / Lead / Site.
+ */
+const LINKAGE_FIELDS = ['linkable_id', 'linkable_type'] as const
+
+/**
+ * Warn when a contact create asked for a parent linkage the response did not
+ * come back with.
+ *
+ * The v2 spec advertises `linkable_id` + `linkable_type` on contact create, but
+ * the server has been observed returning HTTP 201 with both nulled — no error,
+ * and no way to attach afterwards (`ContactUpdateInput` states re-link is not
+ * exposed in v2). That leaves a silently orphaned contact. See
+ * BUG-forz-api-contacts-linkage.md.
+ *
+ * This detects the symptom rather than asserting the server is still broken, so
+ * it goes quiet on its own once linkage is echoed back.
+ *
+ * @returns a `#`-prefixed stderr line, or undefined when there is nothing to warn about.
+ */
+export const linkageWarning = (
+  resource: string,
+  requestBody: unknown,
+  created: unknown
+): string | undefined => {
+  if (resource !== 'contacts') return undefined
+  if (!requestBody || typeof requestBody !== 'object') return undefined
+  if (!created || typeof created !== 'object') return undefined
+
+  const sent = requestBody as Record<string, unknown>
+  const got = created as Record<string, unknown>
+
+  const dropped = LINKAGE_FIELDS.filter((field) => {
+    const requested = sent[field]
+    if (requested === undefined || requested === null) return false
+    const returned = got[field]
+    return returned === undefined || returned === null
+  })
+  if (dropped.length === 0) return undefined
+
+  return (
+    `# warning: requested ${dropped.join(' + ')} not present on the created contact — ` +
+    `it is orphaned, and v2 exposes no way to attach it after the fact ` +
+    `(see BUG-forz-api-contacts-linkage.md)`
+  )
+}
+
 export interface ParsedArgs {
   positional: string[]
   flags: Record<string, string | boolean>
@@ -238,7 +286,10 @@ const dispatchResource = async (resource: string, args: ParsedArgs): Promise<voi
         throw new Error(`Usage: forz ${resource} create --body JSON|@file|@-`)
       }
       const idk = typeof args.flags['idempotency-key'] === 'string' ? args.flags['idempotency-key'] : undefined
-      print(await r.create(body as Record<string, unknown>, { idempotencyKey: idk }))
+      const created = await r.create(body as Record<string, unknown>, { idempotencyKey: idk })
+      print(created)
+      const warning = linkageWarning(resource, body, created)
+      if (warning) console.error(warning)
       return
     }
     case 'update': {

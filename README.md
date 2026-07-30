@@ -49,6 +49,14 @@ Credentials live in `~/.forz/config.json` (mode 0600).
 Each CRUD resource supports `list | get | create | update | delete`. Lookups are list-only,
 except `custom_field_definitions`, which also supports `get <id>`.
 
+> **`contacts` — parent linkage may not stick.** The v2 spec advertises `linkable_id` +
+> `linkable_type` on contact create, but the server has been observed returning `201` with both
+> nulled. The contact is then orphaned permanently: v2 exposes no way to re-link it
+> (`PATCH` rejects the same fields with `400`). The CLI cannot fix this server-side, so
+> `forz contacts create` prints a stderr warning when the linkage you asked for is missing from
+> the response — stdout stays clean JSON and the exit code stays zero, since the server did
+> return success. Full report: `BUG-forz-api-contacts-linkage.md`.
+
 ## API conventions baked in
 
 The CLI enforces the Forz v2 conventions automatically:
