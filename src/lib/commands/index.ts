@@ -328,7 +328,8 @@ Conventions:
   - List responses paginate via --cursor; --limit max 100 (default 25).
   - List filtering/sorting/search (per-endpoint allow-list): --sort <field> ascending
     (--sort=-<field> for descending), --q <text> free-text, and --filter.<key> <value> with
-    operators --filter.<key>[gte|lte|gt|lt|ne|in] <value>.
+    operators --filter.<key>[gte|lte|gt|lt|ne|in] <value>. Lookups labels, statuses and
+    custom_field_definitions accept --filter.related_name <Type>.
   - Errors are RFC 9457 problem+json with a stable dotted \`code\` (e.g. validation.failed).
   - Config file: ~/.forz/config.json
 `)

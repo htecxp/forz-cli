@@ -59,7 +59,8 @@ The CLI enforces the Forz v2 conventions automatically:
 - **Filtering, sorting & search:** every CRUD `list` accepts `--sort <field>` (ascending; use
   `--sort=-field` for descending), `--q <text>` free-text search, and `--filter.<key> <value>` (with operators
   `--filter.<key>[gte|lte|gt|lt|ne|in] <value>`). Each endpoint allow-lists its own fields; an unknown field
-  returns `400 filter.invalid` / `sort.invalid`.
+  returns `400 filter.invalid` / `sort.invalid`. Lookups `labels`, `statuses` and `custom_field_definitions`
+  accept `--filter.related_name <Type>`.
 - **Optimistic concurrency:** `update` and `delete` require `--if-match <etag>`. Run `forz <resource> get <id>`
   first — the weak ETag (`W/"<epoch>-<lock>"`, e.g. `W/"1745596800-3"`) is printed on stderr; quote it whole
   in the shell.
