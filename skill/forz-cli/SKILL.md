@@ -115,6 +115,10 @@ Common allow-lists: `customers` → `q,sort,organization,number,status,created_a
 (`cursor.invalid_filters`). Status values are the tenant's own labels — list them with
 `forz statuses list` when unsure.
 
+Lookups take no `--sort`/`--q`, but `labels`, `statuses` and `custom_field_definitions`
+accept `--filter.related_name <Type>` to scope the catalog to one resource type, e.g.
+`forz statuses list --filter.related_name Job`.
+
 ## Body input
 
 Anywhere a `--body` is accepted you can pass JSON three ways:
@@ -135,6 +139,7 @@ and body, e.g. `HTTP 422 [validation.failed]: ...`. Common ones:
 - `rate_limit.exceeded` (429 — back off; `forz ping` shows your budget).
 - `idempotency_key.required` / `idempotency_key.in_use` (409 — same key, different body).
 - `pagination.limit_too_large` (`--limit` > 100), `sort.invalid`, `filter.invalid`, `cursor.invalid` / `cursor.expired` / `cursor.invalid_filters`, `number.immutable`.
+- `status.transition_invalid` (the requested `status` isn't a legal next step from the current one — check `forz statuses list`).
 
 ## Resource map
 
@@ -194,6 +199,15 @@ forz customers create --body '{"organization":"Acme"}'                          
 forz sites create     --body '{"site_name":"HQ","street":"123 Main St","city":"Austin","state":"TX","siteable_type":"Customer","siteable_id":"<customer-id>"}'
 forz jobs create      --body '{"customer_id":"<customer-id>","site_id":"<site-id>","title":"Annual service","job_type":"Service Call"}'
 ```
+`customers` also accept `reference` — a partner-defined external id — on create/update.
+
+**Line items (`lineitems` on jobs / estimates / invoices / sales orders):** each entry needs
+`item_id`. `unit_price` is optional on new lines — omit it and the server resolves the
+customer's contract price, else the item's list price; send `0` for a deliberately free
+line. On updates, an entry carrying `id` keeps its stored price when `unit_price` is
+omitted. `labor_hours_per_unit` / `labor_rate` are accepted only while the tenant's
+`labor_pricing` module is on and are silently stripped otherwise, so check the response.
+
 Look up valid `job_type` / `tax_rate` / `payment_term` values from the matching lookup
 (`forz job_types list`, etc.) before referencing them — `job_type` is the JobType's
 display name, not an id.
