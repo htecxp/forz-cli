@@ -67,6 +67,16 @@ export const CRUD_RESOURCES = [
   'projects',
 ] as const
 
+/** Read-only records: `list`, `get <id>` and `notes` — no create/update/delete in v2. */
+export const READONLY_RESOURCES = [
+  'assets',
+  'vendors',
+  'tickets',
+  'purchase_orders',
+  'recurring_jobs',
+  'recurring_invoices',
+] as const
+
 /** Read-only lookups (list only, except `custom_field_definitions` which also supports `get`). */
 export const LOOKUPS = [
   'payment_terms',
@@ -123,8 +133,11 @@ const buildListParams = (
   return params
 }
 
-const client = async (): Promise<ForzClient> => {
+// `--base-url` / `--token` override the saved config for one invocation.
+const client = async (args?: ParsedArgs): Promise<ForzClient> => {
   const cfg = await config.load()
+  if (typeof args?.flags['base-url'] === 'string') cfg.baseUrl = args.flags['base-url']
+  if (typeof args?.flags.token === 'string') cfg.token = args.flags.token
   if (!cfg.token) {
     throw new Error('Not authenticated. Run `forz login --token <api-key>` first.')
   }
@@ -152,8 +165,8 @@ const logout = async (): Promise<void> => {
   console.log('Logged out.')
 }
 
-const ping = async (): Promise<void> => {
-  const c = await client()
+const ping = async (args: ParsedArgs): Promise<void> => {
+  const c = await client(args)
   // GET /api/v2/system_options is a cheap authenticated read.
   const res = await c.raw('/api/v2/system_options', { query: { limit: 1 } })
   const limit = res.headers['ratelimit-limit']
@@ -165,8 +178,8 @@ const ping = async (): Promise<void> => {
 // `forz whoami` — confirm which account/user this key belongs to before mutating.
 // JSON payload to stdout (pipeable: `forz whoami | jq .account`); a single human
 // summary line to stderr so it never pollutes the JSON.
-const whoami = async (): Promise<void> => {
-  const c = await client()
+const whoami = async (args: ParsedArgs): Promise<void> => {
+  const c = await client(args)
   const res = await c.raw('/api/v2/me')
   const me = unwrap(res.body) as MeIdentity
   print(me)
@@ -193,7 +206,7 @@ const configCmd = async (args: ParsedArgs): Promise<void> => {
 
 const dispatchResource = async (resource: string, args: ParsedArgs): Promise<void> => {
   const [verb, ...rest] = args.positional
-  const c = await client()
+  const c = await client(args)
 
   // Lookups: list-only (plus `get <id>` for gettable lookups).
   if ((LOOKUPS as readonly string[]).includes(resource)) {
@@ -212,13 +225,28 @@ const dispatchResource = async (resource: string, args: ParsedArgs): Promise<voi
     return
   }
 
-  if (!(CRUD_RESOURCES as readonly string[]).includes(resource)) {
+  const readonly = (READONLY_RESOURCES as readonly string[]).includes(resource)
+  if (!readonly && !(CRUD_RESOURCES as readonly string[]).includes(resource)) {
     throw new Error(`Unknown resource: ${resource}`)
+  }
+  if (readonly && ['create', 'update', 'delete'].includes(verb)) {
+    throw new Error(`${resource} is read-only in API v2 (list, get, notes only).`)
   }
 
   const r = c.resource(resource)
 
   switch (verb) {
+    case 'notes': {
+      const [id] = rest
+      if (!id) throw new Error(`Usage: forz ${resource} notes <id> [--add <text>]`)
+      const text = args.flags.add
+      if (typeof text === 'string') {
+        print(await r.createNote(id, text))
+        return
+      }
+      printPage(await r.listNotes(id, buildListParams(args)))
+      return
+    }
     case undefined:
     case 'list': {
       printPage(await r.list(buildListParams(args)))
@@ -278,7 +306,7 @@ const raw = async (args: ParsedArgs): Promise<void> => {
   for (const [k, v] of Object.entries(args.flags)) {
     if (k.startsWith('header.') && typeof v === 'string') headers[k.slice('header.'.length)] = v
   }
-  const c = await client()
+  const c = await client(args)
   const res = await c.raw(pathArg, { method, body, headers })
   print(res.body)
 }
@@ -302,8 +330,11 @@ Top-level commands:
   raw <path> [--method M] [--body J] [--header K=V] Call any v2 path
   help                                             Show this help
 
-Resources (full CRUD: list, get, create, update, delete):
+Resources (full CRUD: list, get, create, update, delete, notes):
   ${CRUD_RESOURCES.join(', ')}
+
+Read-only resources (list, get, notes):
+  ${READONLY_RESOURCES.join(', ')}
 
 Lookups (list only; custom_field_definitions also supports \`get <id>\`):
   ${LOOKUPS.join(', ')}
@@ -316,6 +347,8 @@ Examples:
   forz jobs create --body @./new-job.json
   forz invoices create --body @./invoice.json     # auto-generates Idempotency-Key
   forz customers update <id> --if-match 'W/"1745596800-3"' --body '{"organization":"Acme Inc"}'
+  forz jobs notes <id>                          # list comments on a record
+  forz jobs notes <id> --add "Called back, wants a quote by Friday"
   forz custom_field_definitions get 0190a1b2-9c3d-7e4f-8a1b-2c3d4e5f6071
   forz raw /api/v2/system_options
 
@@ -342,13 +375,14 @@ export const dispatch = async (argv: string[]): Promise<void> => {
   if (cmd === undefined || cmd === 'help' || cmd === '-h' || cmd === '--help') return help()
   if (cmd === 'login') return login(args)
   if (cmd === 'logout') return logout()
-  if (cmd === 'ping') return ping()
-  if (cmd === 'whoami') return whoami()
+  if (cmd === 'ping') return ping(args)
+  if (cmd === 'whoami') return whoami(args)
   if (cmd === 'config') return configCmd(args)
   if (cmd === 'raw') return raw(args)
 
   if (
     (CRUD_RESOURCES as readonly string[]).includes(cmd) ||
+    (READONLY_RESOURCES as readonly string[]).includes(cmd) ||
     (LOOKUPS as readonly string[]).includes(cmd)
   ) {
     return dispatchResource(cmd, args)

@@ -44,9 +44,11 @@ Credentials live in `~/.forz/config.json` (mode 0600).
 | Group        | Resources                                                                                                                          |
 | ------------ | -------------------------------------------------------------------------------------------------------------------------------- |
 | Full CRUD    | `customers`, `sites`, `contacts`, `jobs`, `estimates`, `invoices`, `sales_orders`, `items`, `tasks`, `leads`, `deals`, `projects` |
+| Read-only    | `assets`, `vendors`, `tickets`, `purchase_orders`, `recurring_jobs`, `recurring_invoices`                                          |
 | Lookups (RO) | `payment_terms`, `tax_rates`, `job_types`, `item_categories`, `system_options`, `labels`, `statuses`, `custom_field_definitions`  |
 
-Each CRUD resource supports `list | get | create | update | delete`. Lookups are list-only,
+Each CRUD resource supports `list | get | create | update | delete | notes`. Read-only resources
+support `list | get | notes` (`notes <id>` lists comments, `notes <id> --add <text>` adds one). Lookups are list-only,
 except `custom_field_definitions`, which also supports `get <id>`.
 
 ## API conventions baked in
@@ -78,6 +80,7 @@ forz whoami                                     # confirm this key's account/use
 forz ping                                       # authenticated health check
 forz config show
 forz config set baseUrl https://staging.forz.io
+forz <any command> --base-url http://localhost:3000 --token fz_…   # one-off override of saved config
 
 forz <resource> list [--limit N] [--cursor C] [--sort <field>] [--q <text>] [--filter.<key> <val> ...]
 forz <resource> get <id>                        # prints ETag on stderr
@@ -85,6 +88,8 @@ forz <resource> create --body JSON|@file|@-     # @- reads stdin
 forz <resource> update <id> --if-match <etag> --body JSON|@file
 forz <resource> delete <id> --if-match <etag>
 
+forz <resource> notes <id> [--limit N] [--cursor C]   # list comments on a record
+forz <resource> notes <id> --add "<text>"               # add a comment
 forz custom_field_definitions get <id>          # gettable lookup
 
 forz raw <path> [--method M] [--body J] [--header.<H> <V>]

@@ -37,6 +37,16 @@ export interface Fetched<T> {
   etag?: string
 }
 
+/** A user-authored comment on a record (`/api/v2/<resource>/{id}/notes`). */
+export interface Note {
+  id: string
+  description: string
+  author_id?: number | null
+  author_name?: string | null
+  created_at: string
+  updated_at: string
+}
+
 /** Resources that require an `Idempotency-Key` on POST (financial). */
 export const FINANCIAL_RESOURCES = new Set(['invoices', 'sales_orders'])
 
@@ -120,6 +130,28 @@ export class Resource<T = Record<string, unknown>> {
       headers: { 'If-Match': options.ifMatch },
     })
     return unwrap<T>(res.body)
+  }
+
+  /** GET /api/v2/<resource>/{id}/notes — user-authored comments on a record. */
+  async listNotes(id: string, params: ListParams = {}): Promise<Page<Note>> {
+    const res = await this.client.raw<{ data: Note[]; has_more: boolean }>(
+      `${this.path(id)}/notes`,
+      { query: params }
+    )
+    return {
+      data: res.body.data,
+      hasMore: res.body.has_more,
+      nextCursor: parseLinkNextCursor(res.headers.link as string | undefined),
+    }
+  }
+
+  /** POST /api/v2/<resource>/{id}/notes — body is wrapped as `{note: {description}}`. */
+  async createNote(id: string, description: string): Promise<Note> {
+    const res = await this.client.raw<{ data: Note }>(`${this.path(id)}/notes`, {
+      method: 'POST',
+      body: { note: { description } },
+    })
+    return unwrap<Note>(res.body)
   }
 
   async delete(id: string, options: MutationOptions = {}): Promise<void> {

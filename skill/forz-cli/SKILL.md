@@ -4,7 +4,8 @@ description: >-
   Drive the Forz field-service management platform from the command line using the
   `forz` CLI (npm package `forz-cli`, Forz Public API v2). Use this skill whenever the
   user wants to read or modify Forz data — customers, sites, contacts, jobs, estimates,
-  invoices, sales orders, items, tasks, leads, deals, or projects — or mentions Forz,
+  invoices, sales orders, items, tasks, leads, deals, projects, assets, vendors, tickets,
+  purchase orders, recurring jobs/invoices, or comments (notes) on any record — or mentions Forz,
   forz.io, field-service jobs/dispatch, an `fz_…` API key, or a bare Forz
   record id (a UUID, or a `customer_…`/`job_…` TypeID). It covers
   the conventions that are easy to get wrong: the ETag/If-Match flow on updates and
@@ -117,7 +118,22 @@ Common allow-lists: `customers` → `q,sort,organization,number,status,created_a
 
 Lookups take no `--sort`/`--q`, but `labels`, `statuses` and `custom_field_definitions`
 accept `--filter.related_name <Type>` to scope the catalog to one resource type, e.g.
-`forz statuses list --filter.related_name Job`.
+`forz statuses list --filter.related_name Job`. The read-only resources (`assets`,
+`vendors`, `tickets`, `purchase_orders`, `recurring_jobs`, `recurring_invoices`) take only
+`--limit`/`--cursor` — no sort, search, or filters in this API version.
+
+## Notes (comments on a record)
+
+Every CRUD and read-only resource exposes the web "Comments" tab as `notes`:
+
+```
+forz jobs notes <job-id>                                   # list, paginates like any list
+forz jobs notes <job-id> --add "Called back, wants a quote by Friday"   # create
+```
+
+`--add` takes plain text and the CLI wraps it as `{"note":{"description":…}}` for you.
+Notes need the parent's `<resource>:write` scope to create; a blank body is `422 validation.failed`.
+Notes are append-only in v2 — there is no update or delete.
 
 ## Body input
 
@@ -145,9 +161,11 @@ and body, e.g. `HTTP 422 [validation.failed]: ...`. Common ones:
 
 Run `forz help` for the authoritative list. As of API version **2026-04-30**:
 
-- **Full CRUD** (`list | get | create | update | delete`):
+- **Full CRUD** (`list | get | create | update | delete | notes`):
   `customers`, `sites`, `contacts`, `jobs`, `estimates`, `invoices`, `sales_orders`,
   `items`, `tasks`, `leads`, `deals`, `projects`.
+- **Read-only records** (`list | get | notes` — `create`/`update`/`delete` are refused locally):
+  `assets`, `vendors`, `tickets`, `purchase_orders`, `recurring_jobs`, `recurring_invoices`.
 - **Lookups** (read-only, `list` only):
   `payment_terms`, `tax_rates`, `job_types`, `item_categories`, `system_options`,
   `labels`, `statuses`, `custom_field_definitions`.
