@@ -148,7 +148,15 @@ Anywhere a `--body` is accepted you can pass JSON three ways:
 Non-2xx responses are RFC 9457 `application/problem+json` with a **stable `code` field**
 in dotted snake_case (e.g. `validation.failed`). Branch on `code`, not on the
 human-readable message (messages change, codes don't). The CLI surfaces the status, code,
-and body, e.g. `HTTP 422 [validation.failed]: ...`. Common ones:
+and body, e.g. `HTTP 422 [validation.failed]: ...`. When the server names the offending
+fields, the CLI prints those one per line instead of the full envelope:
+
+```
+HTTP 422 [validation.failed]: Validation failed
+  phone_numbers.label: must be one of Mobile, Office, Fax, Other
+```
+
+Common codes:
 
 - `validation.failed` (fix the body), `resource.not_found` (bad id).
 - `precondition.failed` (412 — stale ETag, re-`get`), `precondition.required` (428 — missing `--if-match`, only via `raw`).
@@ -225,6 +233,36 @@ customer's contract price, else the item's list price; send `0` for a deliberate
 line. On updates, an entry carrying `id` keeps its stored price when `unit_price` is
 omitted. `labor_hours_per_unit` / `labor_rate` are accepted only while the tenant's
 `labor_pricing` module is on and are silently stripped otherwise, so check the response.
+
+**Contact phone numbers (`phone_numbers` on contacts):** the nested array
+(`{id, label, number, extension, plain}`) is what inbound call / SMS matching reads.
+`phone` and `mobile` are display-only free text and are *not* synced to it on update.
+It writes with the same snapshot-replace semantics as `lineitems`:
+
+```
+forz contacts update <id> --if-match '<etag>' --body '{"contact":{"phone_numbers":[
+  {"id":"<uuid>","extension":"204"},
+  {"label":"Office","number":"415-555-0100"}
+]}}'
+```
+
+- Entry with `id` updates that row; entry without `id` creates one.
+- **Any stored id you leave out is removed.** `get` first and echo back the ids you
+  want to keep — a hand-written array is how numbers get wiped by accident.
+- Omit the `phone_numbers` key entirely to leave the list untouched; send `[]` to clear
+  every number.
+- `number` is required on a new entry. On an existing entry, omit the key to keep the
+  stored value — an explicit blank `number` is a `422`.
+- `label`, when written, must be `Mobile`, `Office`, `Fax`, or `Other`. A legacy label
+  echoed back unchanged is accepted, so a `get` → modify → `update` round trip is safe.
+- `id` and `plain` are server-owned; `plain` is the normalized digit string. Discarded
+  numbers are never returned.
+- An `id` belonging to another contact is a `422` (not a `404`), reported as
+  `phone_numbers.id`.
+- A phone-only update moves the contact's ETag, so the usual `--if-match` flow applies.
+
+On **create only**, a `mobile` with 10+ digits still auto-spawns a `Mobile` entry — skipped
+when the request already supplies `phone_numbers`, so sending both never duplicates.
 
 Look up valid `job_type` / `tax_rate` / `payment_term` values from the matching lookup
 (`forz job_types list`, etc.) before referencing them — `job_type` is the JobType's

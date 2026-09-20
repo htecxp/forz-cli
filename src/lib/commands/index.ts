@@ -347,6 +347,7 @@ Examples:
   forz jobs create --body @./new-job.json
   forz invoices create --body @./invoice.json     # auto-generates Idempotency-Key
   forz customers update <id> --if-match 'W/"1745596800-3"' --body '{"organization":"Acme Inc"}'
+  forz contacts update <id> --if-match '<etag>' --body '{"contact":{"phone_numbers":[{"id":"<uuid>","extension":"204"}]}}'
   forz jobs notes <id>                          # list comments on a record
   forz jobs notes <id> --add "Called back, wants a quote by Friday"
   forz custom_field_definitions get 0190a1b2-9c3d-7e4f-8a1b-2c3d4e5f6071
@@ -364,6 +365,9 @@ Conventions:
     operators --filter.<key>[gte|lte|gt|lt|ne|in] <value>. Lookups labels, statuses and
     custom_field_definitions accept --filter.related_name <Type>.
   - Errors are RFC 9457 problem+json with a stable dotted \`code\` (e.g. validation.failed).
+  - Nested arrays (lineitems, contact phone_numbers) are snapshot-replace: an existing
+    entry whose id is absent from the array you send is removed. Omit the key to leave
+    the list untouched; send [] to clear it. \`get\` first and echo back ids you keep.
   - Config file: ~/.forz/config.json
 `)
 }
@@ -392,9 +396,33 @@ export const dispatch = async (argv: string[]): Promise<void> => {
   throw new Error(`Unknown command: ${cmd}`)
 }
 
+/**
+ * Field errors from a problem+json `errors` extra, e.g.
+ * `{"phone_numbers.label": ["must be one of Mobile, Office, Fax, Other"]}`.
+ * Returns undefined for error bodies that carry no such map.
+ */
+const formatFieldErrors = (body: unknown): string | undefined => {
+  if (!body || typeof body !== 'object') return undefined
+  const errors = (body as { errors?: unknown }).errors
+  if (!errors || typeof errors !== 'object' || Array.isArray(errors)) return undefined
+  const lines = Object.entries(errors as Record<string, unknown>).map(([key, messages]) => {
+    const list = Array.isArray(messages) ? messages : [messages]
+    return `  ${key}: ${list.join('; ')}`
+  })
+  return lines.length ? lines.join('\n') : undefined
+}
+
 export const formatError = (e: unknown): string => {
   if (e instanceof HttpError) {
     const code = e.code ? ` [${e.code}]` : ''
+    // When the server names the offending fields, show those instead of dumping
+    // the 8-key RFC 9457 envelope — the field map is the actionable part.
+    const fields = formatFieldErrors(e.body)
+    if (fields) {
+      const body = e.body as { title?: string; detail?: string }
+      const detail = typeof body.detail === 'string' ? `\n${body.detail}` : ''
+      return `HTTP ${e.status}${code}: ${body.title || e.message}${detail}\n${fields}`
+    }
     const detail = typeof e.body === 'string' ? e.body : JSON.stringify(e.body, null, 2)
     return `HTTP ${e.status}${code}: ${e.message}\n${detail}`
   }
