@@ -47,7 +47,7 @@ Credentials live in `~/.forz/config.json` (mode 0600).
 | Read-only    | `assets`, `vendors`, `tickets`, `purchase_orders`, `recurring_jobs`, `recurring_invoices`                                          |
 | Lookups (RO) | `payment_terms`, `tax_rates`, `job_types`, `item_categories`, `system_options`, `labels`, `statuses`, `custom_field_definitions`  |
 
-Each CRUD resource supports `list | get | create | update | delete | notes`. Read-only resources
+Each CRUD resource supports `list | get | create | update | delete | notes` (`items` has no `notes`). Read-only resources
 support `list | get | notes` (`notes <id>` lists comments, `notes <id> --add <text>` adds one). Lookups are list-only,
 except `custom_field_definitions`, which also supports `get <id>`.
 
@@ -60,12 +60,14 @@ The CLI enforces the Forz v2 conventions automatically:
   the cursor for the next page on stderr when `has_more` is true.
 - **Filtering, sorting & search:** every CRUD `list` accepts `--sort <field>` (ascending; use
   `--sort=-field` for descending), `--q <text>` free-text search, and `--filter.<key> <value>` (with operators
-  `--filter.<key>[gte|lte|gt|lt|ne|in] <value>`). Each endpoint allow-lists its own fields; an unknown field
-  returns `400 filter.invalid` / `sort.invalid`. Lookups `labels`, `statuses` and `custom_field_definitions`
-  accept `--filter.related_name <Type>`.
+  `--filter.<key>[gte|lte|gt|lt|in] <value>`). Each endpoint allow-lists its own fields. An unknown sort field
+  returns `400 sort.invalid`, but an unknown filter key is **silently ignored** (you get the unfiltered list).
+  Lookups `labels`, `statuses` and `custom_field_definitions` accept `--filter.related_name <Type>`.
+- **Body envelope:** `create`/`update` send the body under the singular resource key (`{"job": {...}}`), which
+  the server requires for nested `lineitems` and project `user_ids`. Pass flat fields or the wrapped form.
 - **Optimistic concurrency:** `update` and `delete` require `--if-match <etag>`. Run `forz <resource> get <id>`
   first — the weak ETag (`W/"<epoch>-<lock>"`, e.g. `W/"1745596800-3"`) is printed on stderr; quote it whole
-  in the shell.
+  in the shell. (The server currently enforces it on PATCH only; a stale ETag does not block a DELETE.)
 - **Idempotency:** financial creates (`invoices`, `sales_orders`) auto-generate an
   `Idempotency-Key`; override with `--idempotency-key <key>`.
 - **Errors:** the CLI surfaces RFC 9457 `application/problem+json` bodies and the stable, dotted `code` field
@@ -77,7 +79,7 @@ The CLI enforces the Forz v2 conventions automatically:
 forz login --token fz_<uuid> [--base-url https://staging.forz.io]
 forz logout
 forz whoami                                     # confirm this key's account/user before mutating
-forz ping                                       # authenticated health check
+forz ping                                       # key check via /me + read rate-limit budget
 forz config show
 forz config set baseUrl https://staging.forz.io
 forz <any command> --base-url http://localhost:3000 --token fz_…   # one-off override of saved config

@@ -1,3 +1,6 @@
+> **Resolved server-side 2026-05-11** (Forz `32fd69a01`): `linkable_*` now persists on
+> contact create. Kept for history; don't add the runtime warning suggested below.
+
 # Notes for forz-cli maintainers
 
 ## Spec divergence: contacts cannot be linked at create time

@@ -1,3 +1,6 @@
+> **Resolved server-side 2026-05-11** (Forz `32fd69a01`): `linkable_*` now persists on
+> contact create. Kept for history; don't add the runtime warning suggested below.
+
 # Bug: `POST /api/v2/contacts` silently drops `linkable_id` + `linkable_type`
 
 **API:** Forz Public API V2 — spec version `2026-04-30`

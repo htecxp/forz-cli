@@ -22,3 +22,7 @@ NOTE
 } > "$dst"
 
 echo "Wrote $dst ($(wc -l < "$dst") lines)"
+
+# The npm package ships this zip too; rebuild it so it never lags SKILL.md.
+(cd "$here" && rm -f forz-cli.skill && zip -qX forz-cli.skill forz-cli/SKILL.md forz-cli/AGENTS.md)
+echo "Rebuilt $here/forz-cli.skill"
