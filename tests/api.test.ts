@@ -129,3 +129,33 @@ describe('list pagination', () => {
     expect(page.nextCursor).toBeUndefined()
   })
 })
+
+// Rails ParamsWrapper builds params[:job] from column names only, so a flat body's
+// `lineitems` (and project `user_ids`) never reaches the controller: 201 with no lines.
+// create/update therefore send the body under the singular resource key.
+describe('body envelope', () => {
+  const bodyOf = (spy: jest.SpyInstance): unknown =>
+    (spy.mock.calls[0][1] as unknown as { body: unknown }).body
+
+  it('wraps a flat create body under the singular resource key', async () => {
+    const client = new ForzClient({ token: 'fz_x' })
+    const rawSpy = jest.spyOn(client, 'raw').mockResolvedValue(stubResponse({ data: {} }))
+    await client.resource('sales_orders').create({ customer_id: 'c1', lineitems: [] })
+    expect(bodyOf(rawSpy)).toEqual({ sales_order: { customer_id: 'c1', lineitems: [] } })
+  })
+
+  it('wraps a flat update body', async () => {
+    const client = new ForzClient({ token: 'fz_x' })
+    const rawSpy = jest.spyOn(client, 'raw').mockResolvedValue(stubResponse({ data: {} }))
+    await client.resource('projects').update('p1', { user_ids: [1] }, { ifMatch: 'W/"1-2"' })
+    expect(bodyOf(rawSpy)).toEqual({ project: { user_ids: [1] } })
+  })
+
+  it('passes an already-wrapped body through unchanged', async () => {
+    const client = new ForzClient({ token: 'fz_x' })
+    const rawSpy = jest.spyOn(client, 'raw').mockResolvedValue(stubResponse({ data: {} }))
+    const body = { contact: { phone_numbers: [] } }
+    await client.resource('contacts').update('c1', body, { ifMatch: 'W/"1-2"' })
+    expect(bodyOf(rawSpy)).toEqual(body)
+  })
+})

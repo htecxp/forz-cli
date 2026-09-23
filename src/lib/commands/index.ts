@@ -92,6 +92,9 @@ export const LOOKUPS = [
 /** Lookups that additionally expose a `get <id>` endpoint. */
 export const GETTABLE_LOOKUPS = new Set(['custom_field_definitions'])
 
+/** CRUD resources with no `/{id}/notes` route in v2. */
+const NO_NOTES = new Set(['items'])
+
 const print = (value: unknown): void => {
   if (value === undefined) return
   if (typeof value === 'string') console.log(value)
@@ -167,8 +170,9 @@ const logout = async (): Promise<void> => {
 
 const ping = async (args: ParsedArgs): Promise<void> => {
   const c = await client(args)
-  // GET /api/v2/system_options is a cheap authenticated read.
-  const res = await c.raw('/api/v2/system_options', { query: { limit: 1 } })
+  // GET /api/v2/me needs no scope, so any valid key passes. RateLimit-* here is the
+  // read (GET) bucket; writes are throttled separately.
+  const res = await c.raw('/api/v2/me')
   const limit = res.headers['ratelimit-limit']
   const remaining = res.headers['ratelimit-remaining']
   console.log(`OK — HTTP ${res.status} from ${c.baseUrl}`)
@@ -237,6 +241,7 @@ const dispatchResource = async (resource: string, args: ParsedArgs): Promise<voi
 
   switch (verb) {
     case 'notes': {
+      if (NO_NOTES.has(resource)) throw new Error(`${resource} has no notes in API v2.`)
       const [id] = rest
       if (!id) throw new Error(`Usage: forz ${resource} notes <id> [--add <text>]`)
       const text = args.flags.add
@@ -298,7 +303,7 @@ const dispatchResource = async (resource: string, args: ParsedArgs): Promise<voi
 const raw = async (args: ParsedArgs): Promise<void> => {
   const [pathArg] = args.positional
   if (!pathArg) {
-    throw new Error('Usage: forz raw <path> [--method GET] [--body JSON|@file] [--header K=V ...]')
+    throw new Error('Usage: forz raw <path> [--method GET] [--body JSON|@file] [--header.<Name> <value> ...]')
   }
   const method = typeof args.flags.method === 'string' ? args.flags.method : 'GET'
   const body = readBodyFlag(args.flags.body)
@@ -327,10 +332,10 @@ Top-level commands:
   whoami                                           Show the account/user this key belongs to
   config [show]                                    Print current config (token redacted)
   config set <key> <value>                         Update a config value
-  raw <path> [--method M] [--body J] [--header K=V] Call any v2 path
+  raw <path> [--method M] [--body J] [--header.<Name> <value>]  Call any v2 path
   help                                             Show this help
 
-Resources (full CRUD: list, get, create, update, delete, notes):
+Resources (full CRUD: list, get, create, update, delete, notes; items has no notes):
   ${CRUD_RESOURCES.join(', ')}
 
 Read-only resources (list, get, notes):
@@ -347,7 +352,7 @@ Examples:
   forz jobs create --body @./new-job.json
   forz invoices create --body @./invoice.json     # auto-generates Idempotency-Key
   forz customers update <id> --if-match 'W/"1745596800-3"' --body '{"organization":"Acme Inc"}'
-  forz contacts update <id> --if-match '<etag>' --body '{"contact":{"phone_numbers":[{"id":"<uuid>","extension":"204"}]}}'
+  forz contacts update <id> --if-match '<etag>' --body '{"contact":{"phone_numbers":[{"id":"<uuid>","extension":"204"}]}}'  # full list: ids left out are removed
   forz jobs notes <id>                          # list comments on a record
   forz jobs notes <id> --add "Called back, wants a quote by Friday"
   forz custom_field_definitions get 0190a1b2-9c3d-7e4f-8a1b-2c3d4e5f6071
@@ -355,19 +360,24 @@ Examples:
 
 Conventions:
   - Record ids are UUIDs (e.g. 0190a1b2-9c3d-7e4f-8a1b-2c3d4e5f6071).
-  - Mutations require --if-match <etag> (get the ETag from a prior \`get\`); the value is a
+  - update/delete require --if-match <etag> (get the ETag from a prior \`get\`); the value is a
     weak ETag like W/"1745596800-3" — quote it whole in the shell: --if-match 'W/"1745596800-3"'.
   - Financial creates (invoices, sales_orders) auto-generate an Idempotency-Key;
     override with --idempotency-key <key>.
   - List responses paginate via --cursor; --limit max 100 (default 25).
   - List filtering/sorting/search (per-endpoint allow-list): --sort <field> ascending
     (--sort=-<field> for descending), --q <text> free-text, and --filter.<key> <value> with
-    operators --filter.<key>[gte|lte|gt|lt|ne|in] <value>. Lookups labels, statuses and
-    custom_field_definitions accept --filter.related_name <Type>.
+    operators --filter.<key>[gte|lte|gt|lt|in] <value>. An unknown --sort field is a 400, but
+    an unknown filter key is silently ignored (you get the unfiltered list). Lookups labels,
+    statuses and custom_field_definitions accept --filter.related_name <Type>.
+  - create/update bodies are sent under the singular resource key ({"job":{...}}); pass
+    flat fields or the wrapped form. Via raw, wrap yourself or lineitems are dropped.
   - Errors are RFC 9457 problem+json with a stable dotted \`code\` (e.g. validation.failed).
-  - Nested arrays (lineitems, contact phone_numbers) are snapshot-replace: an existing
-    entry whose id is absent from the array you send is removed. Omit the key to leave
-    the list untouched; send [] to clear it. \`get\` first and echo back ids you keep.
+  - Nested arrays (lineitems, contact phone_numbers) and labels / project user_ids replace
+    the whole list: an existing entry absent from what you send is removed. Omit the key to
+    leave the list untouched; send [] to clear it. \`get\` first and echo back what you keep.
+  - custom_fields merges per key (null clears one); keys are field ids from
+    custom_field_definitions. Unaccepted body keys are silently ignored (200, no 422).
   - Config file: ~/.forz/config.json
 `)
 }
@@ -397,14 +407,21 @@ export const dispatch = async (argv: string[]): Promise<void> => {
 }
 
 /**
- * Field errors from a problem+json `errors` extra, e.g.
- * `{"phone_numbers.label": ["must be one of Mobile, Office, Fax, Other"]}`.
- * Returns undefined for error bodies that carry no such map.
+ * Field errors from a problem+json `errors` extra: a map like
+ * `{"phone_numbers.label": ["must be one of Mobile, Office, Fax, Other"]}`, or
+ * (custom_fields / labels) an array of `{field, code, detail}`.
+ * Returns undefined for error bodies that carry neither.
  */
 const formatFieldErrors = (body: unknown): string | undefined => {
   if (!body || typeof body !== 'object') return undefined
   const errors = (body as { errors?: unknown }).errors
-  if (!errors || typeof errors !== 'object' || Array.isArray(errors)) return undefined
+  if (!errors || typeof errors !== 'object') return undefined
+  if (Array.isArray(errors)) {
+    const lines = errors
+      .filter((e): e is { field?: string; code?: string; detail?: string } => !!e && typeof e === 'object')
+      .map((e) => `  ${e.field ?? '?'}: ${e.detail ?? e.code ?? ''}`)
+    return lines.length ? lines.join('\n') : undefined
+  }
   const lines = Object.entries(errors as Record<string, unknown>).map(([key, messages]) => {
     const list = Array.isArray(messages) ? messages : [messages]
     return `  ${key}: ${list.join('; ')}`

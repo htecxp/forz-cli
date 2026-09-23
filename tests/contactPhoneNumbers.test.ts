@@ -138,6 +138,19 @@ describe('formatError with problem+json field errors', () => {
     expect(out).toContain('  phone_numbers.id: p9 was not found on this contact')
   })
 
+  // custom_fields / labels 422s send `errors` as an array of {field, code, detail}.
+  it('renders an array of field errors one per line', () => {
+    const body = {
+      code: 'validation.failed',
+      title: 'Validation failed',
+      status: 422,
+      errors: [{ field: 'custom_fields.region', code: 'unknown_field', detail: 'is not defined' }],
+    }
+    const out = formatError(new HttpError(422, body, 'msg'))
+    expect(out).toContain('  custom_fields.region: is not defined')
+    expect(out).not.toContain('"status"')
+  })
+
   // Error bodies without an `errors` map (404s, 412s) keep the full dump.
   it('falls back to the raw body when there is no errors map', () => {
     const body = { code: 'resource.not_found', title: 'Not found', status: 404 }

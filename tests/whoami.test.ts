@@ -102,3 +102,19 @@ describe('forz whoami (handler)', () => {
     expect(logSpy).not.toHaveBeenCalled()
   })
 })
+
+// /me needs no scope; /system_options needs lookups:read, so a narrowly scoped
+// but valid key would fail a ping aimed there with 403 auth.scope_missing.
+describe('forz ping', () => {
+  it('probes the scope-free /api/v2/me endpoint', async () => {
+    const loadMock = config.load as unknown as jest.Mock
+    const fromConfigMock = ForzClient.fromConfig as unknown as jest.Mock
+    loadMock.mockResolvedValue({ baseUrl: 'https://app.forz.io', token: 'fz_x' })
+    const raw = jest.fn().mockResolvedValue({ status: 200, headers: {}, body: {} })
+    fromConfigMock.mockReturnValue({ raw, baseUrl: 'https://app.forz.io' })
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined)
+    await dispatch(['ping'])
+    expect(raw).toHaveBeenCalledWith('/api/v2/me')
+    logSpy.mockRestore()
+  })
+})

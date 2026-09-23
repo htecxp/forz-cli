@@ -44,4 +44,10 @@ describe('forz <resource> notes', () => {
       dispatch(['assets', 'update', 'a1', '--if-match', 'x', '--body', '{}'])
     ).rejects.toThrow(/read-only/)
   })
+
+  // /api/v2/items/{id}/notes is not routed; the 404 would read as "bad item id".
+  it('refuses items notes before touching the API', async () => {
+    await expect(dispatch(['items', 'notes', 'i1'])).rejects.toThrow(/no notes/)
+    expect(listNotes).not.toHaveBeenCalled()
+  })
 })

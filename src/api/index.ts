@@ -85,6 +85,15 @@ export class Resource<T = Record<string, unknown>> {
     return id ? `${base}/${encodeURIComponent(id)}` : base
   }
 
+  // The server reads `params.require(:job)`, and Rails only auto-wraps a flat body's
+  // column names, so a flat `lineitems` / project `user_ids` would be silently dropped.
+  // Send `{job: {...}}`; a body already carrying the key passes through.
+  private wrap(body: unknown): unknown {
+    const key = this.name.replace(/s$/, '')
+    if (!body || typeof body !== 'object' || Array.isArray(body) || key in body) return body
+    return { [key]: body }
+  }
+
   async list(params: ListParams = {}): Promise<Page<T>> {
     const res = await this.client.raw<{ data: T[]; has_more: boolean }>(this.path(), {
       query: params,
@@ -112,7 +121,7 @@ export class Resource<T = Record<string, unknown>> {
     }
     const res = await this.client.raw<{ data: T } | T>(this.path(), {
       method: 'POST',
-      body: input,
+      body: this.wrap(input),
       headers,
     })
     return unwrap<T>(res.body)
@@ -126,7 +135,7 @@ export class Resource<T = Record<string, unknown>> {
     }
     const res = await this.client.raw<{ data: T } | T>(this.path(id), {
       method: 'PATCH',
-      body: patch,
+      body: this.wrap(patch),
       headers: { 'If-Match': options.ifMatch },
     })
     return unwrap<T>(res.body)
