@@ -373,6 +373,8 @@ const dispatchResource = async (resource: string, args: ParsedArgs): Promise<voi
       const [id] = rest
       const updateId = flag(args, 'update')
       const deleteId = flag(args, 'delete')
+      if ([args.flags.add, updateId, deleteId].filter(Boolean).length > 1)
+        throw usage('Use only one of --add, --update, --delete')
       if (!id) {
         throw usage(
           'Usage: forz contacts linkages <id> [--add --body J | --update <linkage_id> --body J | --delete <linkage_id>]'
@@ -649,12 +651,15 @@ export const suggest = (cmd: string): string | undefined => {
 }
 
 export const dispatch = async (argv: string[]): Promise<void> => {
-  const [cmd, ...rest] = argv
-  const args = parseArgs(rest)
+  // Parse the whole argv so global flags may come before the command (`forz --token X whoami`).
+  const parsed = parseArgs(argv)
+  const [cmd, ...positional] = parsed.positional
+  const args = { positional, flags: parsed.flags }
   const wantsHelp = args.flags.help === true || args.flags.h === true
 
-  if (cmd === undefined || cmd === 'help' || cmd === '-h' || cmd === '--help') return help()
-  if (cmd === 'version' || cmd === '--version' || cmd === '-v') return version()
+  if (cmd === undefined && (args.flags.version === true || args.flags.v === true)) return version()
+  if (cmd === undefined || cmd === 'help') return help()
+  if (cmd === 'version') return version()
   if (RESOURCES.includes(cmd)) return wantsHelp ? resourceHelp(cmd) : dispatchResource(cmd, args)
   if (COMMANDS.includes(cmd) && wantsHelp) return help()
   if (cmd === 'login') return login(args)

@@ -345,6 +345,21 @@ body is silently ignored (you can't mark an invoice Paid via the API).
 Project `user_ids` also replaces the whole team. `custom_fields` merges: only the keys you send
 change and `null` clears one. Its keys are the field `id`s (`fields[].id`) from
 `forz custom_field_definitions list --filter.related_name <Type>`, not the labels.
+Values are typed by the field's `field_type`:
+
+| field_type | JSON value |
+|---|---|
+| `short_text`, `text`, `paragraph`, `url` | string |
+| `checkbox` | `true`/`false` (not `"true"`) |
+| `date` | `"YYYY-MM-DD"` |
+| `dropdown` | one string from the field's `options` |
+| `multiselect` | array of strings, each from `options` |
+| `attachment` | read-only; any write is a 422 |
+
+A wrong type, an unknown id or a value outside `options` is a 422 whose `errors` key is
+`custom_fields.<field_id>`, and the whole write is rejected (valid keys in the same body are not
+applied). `custom_fields` works on create too. Lists can't be filtered by a custom field
+(`--filter.<field_id>` is a 400 `filter.invalid`).
 
 ## Working style
 

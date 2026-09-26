@@ -51,6 +51,16 @@ describe('forz CLI surface', () => {
     expect(suggest('zzzzzzzz')).toBeUndefined()
   })
 
+  it('global flags may precede the command; linkage modes are exclusive', async () => {
+    await expect(dispatch(['--limit', 'abc', 'customers', 'list'])).rejects.toThrow(
+      /--limit must be a positive integer/
+    )
+    await expect(
+      dispatch(['contacts', 'linkages', 'c1', '--add', '--delete', 'l1', '--body', '{}'])
+    ).rejects.toThrow(/only one of --add, --update, --delete/)
+    expect(fromConfigMock).not.toHaveBeenCalled()
+  })
+
   it('create/update refuse a non-object --body before any request', async () => {
     await expect(dispatch(['projects', 'create', '--body', '"str"'])).rejects.toThrow(
       /--body must be a JSON object/
