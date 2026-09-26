@@ -37,52 +37,63 @@ Then `npx forz <command>` or, if installed globally, `forz <command>`.
    forz customers update <id> --if-match 'W/"1745596800-3"' --body '{"organization":"New name"}'
    ```
 
-Credentials live in `~/.forz/config.json` (mode 0600).
+Credentials live in `~/.forz/config.json` (mode 0600). `FORZ_TOKEN` and `FORZ_BASE_URL`
+override the saved config, and `--token` / `--base-url` override both (flag > env > config).
 
 ## Resources
 
-| Group        | Resources                                                                                                                          |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| Group        | Resources                                                                                                                         |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------- |
 | Full CRUD    | `customers`, `sites`, `contacts`, `jobs`, `estimates`, `invoices`, `sales_orders`, `items`, `tasks`, `leads`, `deals`, `projects` |
-| Read-only    | `assets`, `vendors`, `tickets`, `purchase_orders`, `recurring_jobs`, `recurring_invoices`                                          |
+| List/create  | `systems` (`list --filter.site_id` / `--filter.customer_id`, `create`)                                                            |
+| Read-only    | `assets`, `vendors`, `tickets`, `purchase_orders`, `recurring_jobs`, `recurring_invoices`                                         |
 | Lookups (RO) | `payment_terms`, `tax_rates`, `job_types`, `item_categories`, `system_options`, `labels`, `statuses`, `custom_field_definitions`  |
 
 Each CRUD resource supports `list | get | create | update | delete | notes` (`items` has no `notes`). Read-only resources
 support `list | get | notes` (`notes <id>` lists comments, `notes <id> --add <text>` adds one). Lookups are list-only,
-except `custom_field_definitions`, which also supports `get <id>`.
+except `custom_field_definitions`, which also supports `get <id>`. `forz <resource> --help` shows one
+resource's commands. Contacts also have a `linkages` sub-resource (see below).
 
 ## API conventions baked in
 
 The CLI enforces the Forz v2 conventions automatically:
 
 - **Bearer auth** with `fz_<UUIDv7>` keys.
-- **Pagination** via HMAC-signed cursors. `--limit` is capped server-side at 100 (default 25). The CLI prints
+- **Pagination** via HMAC-signed cursors. `--limit` max 100 (default 25); above that is `400 pagination.limit_too_large`, not clamped. The CLI prints
   the cursor for the next page on stderr when `has_more` is true.
 - **Filtering, sorting & search:** every CRUD `list` accepts `--sort <field>` (ascending; use
   `--sort=-field` for descending), `--q <text>` free-text search, and `--filter.<key> <value>` (with operators
-  `--filter.<key>[gte|lte|gt|lt|in] <value>`). Each endpoint allow-lists its own fields. An unknown sort field
-  returns `400 sort.invalid`, but an unknown filter key is **silently ignored** (you get the unfiltered list).
-  Lookups `labels`, `statuses` and `custom_field_definitions` accept `--filter.related_name <Type>`.
-- **Body envelope:** `create`/`update` send the body under the singular resource key (`{"job": {...}}`), which
-  the server requires for nested `lineitems` and project `user_ids`. Pass flat fields or the wrapped form.
+  `--filter.<key>[gte|lte|gt|lt|in] <value>`). Each endpoint allow-lists its own fields: an unknown sort
+  field returns `400 sort.invalid`, and an unknown filter/query key returns `400 filter.invalid` naming the
+  allowed keys. Read-only resources take only `--limit`/`--cursor`. Lookups `labels`, `statuses` and
+  `custom_field_definitions` accept `--filter.related_name <Type>`.
+- **Body envelope:** `create`/`update` send the body under the singular resource key (`{"job": {...}}`).
+  Flat fields or the wrapped form both work.
 - **Optimistic concurrency:** `update` and `delete` require `--if-match <etag>`. Run `forz <resource> get <id>`
   first — the weak ETag (`W/"<epoch>-<lock>"`, e.g. `W/"1745596800-3"`) is printed on stderr; quote it whole
-  in the shell. (The server currently enforces it on PATCH only; a stale ETag does not block a DELETE.)
+  in the shell. The server enforces it on PATCH and DELETE (`428` missing, `412` stale).
 - **Idempotency:** financial creates (`invoices`, `sales_orders`) auto-generate an
-  `Idempotency-Key`; override with `--idempotency-key <key>`.
+  `Idempotency-Key`; override with `--idempotency-key <key>`. When such a create fails, the key is printed on
+  stderr so you can retry it with the same body (except `409 idempotency_key.in_use`: that key was already used
+  with a different body, so send the original body or use a new key).
+- **Retries & timeouts:** `429`/`503` are retried a bounded number of times, honoring `Retry-After`.
+  Requests time out after 30s; change it with `--timeout <seconds>` or `FORZ_TIMEOUT`.
+- **Exit codes:** `0` success, `1` API/network error, `2` usage error.
 - **Errors:** the CLI surfaces RFC 9457 `application/problem+json` bodies and the stable, dotted `code` field
   (e.g. `validation.failed`, `resource.not_found`) on non-2xx responses.
 
 ## Common commands
 
 ```
-forz login --token fz_<uuid> [--base-url https://staging.forz.io]
+forz --version
+forz login --token fz_<uuid> [--base-url http://localhost:3000]
 forz logout
 forz whoami                                     # confirm this key's account/user before mutating
 forz ping                                       # key check via /me + read rate-limit budget
 forz config show
-forz config set baseUrl https://staging.forz.io
-forz <any command> --base-url http://localhost:3000 --token fz_…   # one-off override of saved config
+forz config set baseUrl http://localhost:3000
+forz <any command> --base-url http://localhost:3000 --token fz_…   # one-off override (also FORZ_BASE_URL / FORZ_TOKEN)
+forz <resource> --help
 
 forz <resource> list [--limit N] [--cursor C] [--sort <field>] [--q <text>] [--filter.<key> <val> ...]
 forz <resource> get <id>                        # prints ETag on stderr
@@ -94,8 +105,19 @@ forz <resource> notes <id> [--limit N] [--cursor C]   # list comments on a recor
 forz <resource> notes <id> --add "<text>"               # add a comment
 forz custom_field_definitions get <id>          # gettable lookup
 
-forz raw <path> [--method M] [--body J] [--header.<H> <V>]
+forz contacts linkages <id>                     # list the records a contact is linked to
+forz contacts linkages <id> --add --body '{"linkable_type":"Customer","linkable_id":"<uuid>"}'
+forz contacts linkages <id> --update <linkage_id> --body '{"primary":true}'
+forz contacts linkages <id> --delete <linkage_id>
+
+forz systems list --filter.site_id <site-id>
+forz systems create --body '{"site_id":"<uuid>","system_option_id":"<uuid>"}'
+
+forz raw <path> [--method M] [--body J] [--header.<H> <V>] [--include]   # --include prints status + headers
 ```
+
+`raw` sends your token only to the configured base URL's origin; it refuses an absolute URL on
+another host.
 
 ## Library use
 
@@ -106,12 +128,20 @@ const client = new ForzClient({ token: process.env.FORZ_TOKEN })
 
 const page = await client.resource('customers').list({ limit: 25 })
 for (const c of page.data) console.log(c.id, c.organization)
-while (page.hasMore && page.nextCursor) { /* fetch next */ }
+while (page.hasMore && page.nextCursor) {
+  /* fetch next */
+}
 
-const { data: customer, etag } = await client.resource('customers').get('0190a1b2-9c3d-7e4f-8a1b-2c3d4e5f6071')
-await client.resource('customers').update(customer.id, { organization: 'New name' }, { ifMatch: etag! })
+const { data: customer, etag } = await client
+  .resource('customers')
+  .get('0190a1b2-9c3d-7e4f-8a1b-2c3d4e5f6071')
+await client
+  .resource('customers')
+  .update(customer.id, { organization: 'New name' }, { ifMatch: etag! })
 
-await client.resource('invoices').create({ /* ... */ })  // Idempotency-Key auto-set
+await client.resource('invoices').create({
+  /* ... */
+}) // Idempotency-Key auto-set
 ```
 
 ## Use with Claude Code, Codex & other AI agents
@@ -121,10 +151,10 @@ correctly — the ETag/If-Match flow, idempotency on financial creates, cursor p
 RFC 9457 error handling. The same guidance is provided in two formats (`SKILL.md` is the
 source of truth; `AGENTS.md` is generated from it):
 
-| Agent | File | Install |
-| ----- | ---- | ------- |
-| **Claude Code** | `skill/forz-cli/SKILL.md` (+ packaged `skill/forz-cli.skill`) | copy into `~/.claude/skills/forz-cli/` |
-| **OpenAI Codex** (and other [`AGENTS.md`](https://agents.md)-compatible agents) | `skill/forz-cli/AGENTS.md` | append to your project's `AGENTS.md` or `~/.codex/AGENTS.md` |
+| Agent                                                                           | File                                                          | Install                                                      |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------ |
+| **Claude Code**                                                                 | `skill/forz-cli/SKILL.md` (+ packaged `skill/forz-cli.skill`) | copy into `~/.claude/skills/forz-cli/`                       |
+| **OpenAI Codex** (and other [`AGENTS.md`](https://agents.md)-compatible agents) | `skill/forz-cli/AGENTS.md`                                    | append to your project's `AGENTS.md` or `~/.codex/AGENTS.md` |
 
 ```
 # Claude Code — install as a skill

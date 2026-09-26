@@ -1,11 +1,13 @@
 import { randomUUID } from 'crypto'
 
 import { Config } from '../lib/config'
-import { request, RequestOptions, Response } from '../lib/http'
+import { normalizeBaseUrl, request, RequestOptions, Response } from '../lib/http'
 
 export interface ForzClientOptions {
   baseUrl?: string
   token?: string
+  /** Per-request socket timeout in ms (default 30000). */
+  timeout?: number
 }
 
 export interface Page<T> {
@@ -45,6 +47,16 @@ export interface Note {
   author_name?: string | null
   created_at: string
   updated_at: string
+}
+
+/** Link from a contact to a Customer / Lead / Site (`/api/v2/contacts/{id}/linkages`). */
+export interface ContactLinkage {
+  id: string
+  linkable_id?: string
+  linkable_type?: string
+  relationship_type?: string
+  primary?: boolean
+  [k: string]: unknown
 }
 
 /** Resources that require an `Idempotency-Key` on POST (financial). */
@@ -163,6 +175,44 @@ export class Resource<T = Record<string, unknown>> {
     return unwrap<Note>(res.body)
   }
 
+  /** GET /api/v2/contacts/{id}/linkages — not paginated. */
+  async listLinkages(id: string): Promise<ContactLinkage[]> {
+    const res = await this.client.raw<{ data: ContactLinkage[] }>(`${this.path(id)}/linkages`)
+    return unwrap<ContactLinkage[]>(res.body)
+  }
+
+  /** POST /api/v2/contacts/{id}/linkages — body wrapped as `{linkage: {...}}`. */
+  async createLinkage(id: string, body: Record<string, unknown>): Promise<ContactLinkage> {
+    const res = await this.client.raw(`${this.path(id)}/linkages`, {
+      method: 'POST',
+      body: 'linkage' in body ? body : { linkage: body },
+    })
+    return unwrap<ContactLinkage>(res.body)
+  }
+
+  /** PATCH /api/v2/contacts/{id}/linkages/{linkage_id} — no ETag on linkages. */
+  async updateLinkage(
+    id: string,
+    linkageId: string,
+    body: Record<string, unknown>
+  ): Promise<ContactLinkage> {
+    const res = await this.client.raw(
+      `${this.path(id)}/linkages/${encodeURIComponent(linkageId)}`,
+      {
+        method: 'PATCH',
+        body: 'linkage' in body ? body : { linkage: body },
+      }
+    )
+    return unwrap<ContactLinkage>(res.body)
+  }
+
+  /** DELETE /api/v2/contacts/{id}/linkages/{linkage_id} — 409 contact.primary_linkage on a primary. */
+  async deleteLinkage(id: string, linkageId: string): Promise<void> {
+    await this.client.raw(`${this.path(id)}/linkages/${encodeURIComponent(linkageId)}`, {
+      method: 'DELETE',
+    })
+  }
+
   async delete(id: string, options: MutationOptions = {}): Promise<void> {
     if (!options.ifMatch) {
       throw new Error(
@@ -200,18 +250,20 @@ export class ListResource<T = Record<string, unknown>> {
 export class ForzClient {
   readonly baseUrl: string
   readonly token?: string
+  readonly timeout: number
 
   constructor(options: ForzClientOptions = {}) {
-    this.baseUrl = options.baseUrl || 'https://app.forz.io'
+    this.baseUrl = normalizeBaseUrl(options.baseUrl || 'https://app.forz.io')
     this.token = options.token
+    this.timeout = options.timeout ?? 30_000
   }
 
-  static fromConfig(config: Config): ForzClient {
-    return new ForzClient({ baseUrl: config.baseUrl, token: config.token })
+  static fromConfig(config: Config & Pick<ForzClientOptions, 'timeout'>): ForzClient {
+    return new ForzClient({ baseUrl: config.baseUrl, token: config.token, timeout: config.timeout })
   }
 
   raw<T = unknown>(path: string, options: RequestOptions = {}): Promise<Response<T>> {
-    return request<T>(this.baseUrl, path, { ...options, token: this.token })
+    return request<T>(this.baseUrl, path, { timeout: this.timeout, ...options, token: this.token })
   }
 
   resource<T = Record<string, unknown>>(name: string): Resource<T> {

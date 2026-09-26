@@ -1,8 +1,11 @@
+import { randomUUID } from 'crypto'
 import { readFileSync } from 'fs'
+import { IncomingHttpHeaders } from 'http'
+import path from 'path'
 
-import { ForzClient } from '../../api'
+import { FINANCIAL_RESOURCES, ForzClient } from '../../api'
 import * as config from '../config'
-import { HttpError } from '../http'
+import { HttpError, normalizeBaseUrl, UsageError } from '../http'
 
 const unwrap = (body: unknown): unknown =>
   body && typeof body === 'object' && 'data' in (body as Record<string, unknown>)
@@ -32,6 +35,11 @@ export interface ParsedArgs {
   flags: Record<string, string | boolean>
 }
 
+/** Flags that never take a value, so `--include /path` keeps `/path` positional. */
+const BOOLEAN_FLAGS = new Set(['help', 'version', 'include'])
+
+// A flag's value may itself start with '-' (`--sort -created_at`, `--add "-foo"`,
+// `--body @-`); only a following `--flag` token means "no value".
 export const parseArgs = (argv: string[]): ParsedArgs => {
   const positional: string[] = []
   const flags: Record<string, string | boolean> = {}
@@ -39,9 +47,11 @@ export const parseArgs = (argv: string[]): ParsedArgs => {
     const a = argv[i]
     if (a.startsWith('--')) {
       const eq = a.indexOf('=')
-      if (eq >= 0) flags[a.slice(2, eq)] = a.slice(eq + 1)
-      else if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) flags[a.slice(2)] = argv[++i]
-      else flags[a.slice(2)] = true
+      const name = a.slice(2, eq >= 0 ? eq : undefined)
+      if (eq >= 0) flags[name] = a.slice(eq + 1)
+      else if (!BOOLEAN_FLAGS.has(name) && i + 1 < argv.length && !argv[i + 1].startsWith('--'))
+        flags[name] = argv[++i]
+      else flags[name] = true
     } else if (a.startsWith('-') && a.length > 1) {
       flags[a.slice(1)] = true
     } else {
@@ -49,6 +59,19 @@ export const parseArgs = (argv: string[]): ParsedArgs => {
     }
   }
   return { positional, flags }
+}
+
+export { UsageError }
+
+/** String value of a flag; a flag given with no value is a usage error, never a silent fallback. */
+const flag = (args: ParsedArgs, name: string): string | undefined => {
+  const v = args.flags[name]
+  if (v === undefined) return undefined
+  if (typeof v !== 'string' || v === '')
+    throw new UsageError(
+      `--${name} requires a value (for one starting with --, use --${name}=<value>)`
+    )
+  return v
 }
 
 /** Full CRUD resources (list, get, create, update, delete). */
@@ -92,6 +115,9 @@ export const LOOKUPS = [
 /** Lookups that additionally expose a `get <id>` endpoint. */
 export const GETTABLE_LOOKUPS = new Set(['custom_field_definitions'])
 
+/** List + create only (no get/update/delete/notes in v2). */
+export const LIST_CREATE_RESOURCES = ['systems'] as const
+
 /** CRUD resources with no `/{id}/notes` route in v2. */
 const NO_NOTES = new Set(['items'])
 
@@ -108,59 +134,136 @@ const printPage = (page: { data: unknown[]; hasMore: boolean; nextCursor?: strin
   }
 }
 
-const readBodyFlag = (raw: string | boolean | undefined): unknown => {
-  if (raw === undefined || raw === true || raw === false) return undefined
-  if (raw.startsWith('@')) {
-    const path = raw.slice(1)
-    const text = path === '-' ? readFileSync(0, 'utf8') : readFileSync(path, 'utf8')
-    return JSON.parse(text)
+const readBodyFile = (file: string): string => {
+  try {
+    return readFileSync(file, 'utf8')
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT')
+      throw new UsageError(`--body file not found: ${file}`)
+    throw e
   }
-  return JSON.parse(raw)
+}
+
+const readBodyFlag = (args: ParsedArgs): unknown => {
+  const raw = flag(args, 'body')
+  if (raw === undefined) return undefined
+  const text = !raw.startsWith('@')
+    ? raw
+    : raw === '@-'
+    ? readFileSync(0, 'utf8')
+    : readBodyFile(raw.slice(1))
+  try {
+    return JSON.parse(text)
+  } catch (e) {
+    throw new UsageError(`--body is not valid JSON: ${(e as Error).message}`)
+  }
+}
+
+/** Like readBodyFlag, but create/update/linkage bodies must be a JSON object. */
+const readObjectBody = (args: ParsedArgs): Record<string, unknown> | undefined => {
+  const body = readBodyFlag(args)
+  if (body === undefined) return undefined
+  if (!body || typeof body !== 'object' || Array.isArray(body))
+    throw new UsageError('--body must be a JSON object')
+  return body as Record<string, unknown>
 }
 
 const buildListParams = (
   args: ParsedArgs
 ): { cursor?: string; limit?: number; [k: string]: string | number | boolean | undefined } => {
   const params: Record<string, string | number | boolean | undefined> = {}
-  if (typeof args.flags.cursor === 'string') params.cursor = args.flags.cursor
-  if (typeof args.flags.limit === 'string') params.limit = Number(args.flags.limit)
+  const cursor = flag(args, 'cursor')
+  if (cursor !== undefined) params.cursor = cursor
+  const limit = flag(args, 'limit')
+  if (limit !== undefined) {
+    if (!/^[1-9]\d*$/.test(limit))
+      throw new UsageError(`--limit must be a positive integer (got ${limit})`)
+    params.limit = Number(limit)
+  }
   // First-class sort + free-text search (allowed on every CRUD list endpoint).
-  if (typeof args.flags.sort === 'string') params.sort = args.flags.sort
-  if (typeof args.flags.q === 'string') params.q = args.flags.q
+  const sort = flag(args, 'sort')
+  if (sort !== undefined) params.sort = sort
+  const q = flag(args, 'q')
+  if (q !== undefined) params.q = q
   // Forward any --filter.<key> <value> filters as raw query params, e.g.
   // `--filter.status Open` or `--filter.created_at[gte] 2026-01-01T00:00:00Z`.
-  for (const [k, v] of Object.entries(args.flags)) {
-    if (k === 'cursor' || k === 'limit' || k === 'sort' || k === 'q') continue
-    if (k.startsWith('filter.')) params[k.slice('filter.'.length)] = v
+  for (const k of Object.keys(args.flags)) {
+    if (k.startsWith('filter.')) params[k.slice('filter.'.length)] = flag(args, k)
   }
   return params
 }
 
-// `--base-url` / `--token` override the saved config for one invocation.
-const client = async (args?: ParsedArgs): Promise<ForzClient> => {
-  const cfg = await config.load()
-  if (typeof args?.flags['base-url'] === 'string') cfg.baseUrl = args.flags['base-url']
-  if (typeof args?.flags.token === 'string') cfg.token = args.flags.token
-  if (!cfg.token) {
-    throw new Error('Not authenticated. Run `forz login --token <api-key>` first.')
+/** --timeout <sec> > FORZ_TIMEOUT > the client's 30s default. Returns ms. */
+const timeoutMs = (args: ParsedArgs): number | undefined => {
+  const raw = flag(args, 'timeout') ?? process.env.FORZ_TIMEOUT
+  if (raw === undefined || raw === '') return undefined
+  const secs = Number(raw)
+  if (!(secs > 0))
+    throw new UsageError(
+      `--timeout / FORZ_TIMEOUT must be a positive number of seconds (got ${raw})`
+    )
+  return secs * 1000
+}
+
+/** Normalized http(s) base URL, or a usage error naming where the bad value came from. */
+const checkBaseUrl = (value: string, source: string): string => {
+  const url = normalizeBaseUrl(value)
+  let ok = false
+  try {
+    ok = ['http:', 'https:'].includes(new URL(url).protocol)
+  } catch {
+    // not a URL
   }
-  return ForzClient.fromConfig(cfg)
+  if (!ok) throw new UsageError(`${source} must be an http(s) URL (got ${value})`)
+  return url
+}
+
+/** --base-url flag > FORZ_BASE_URL env (validated); undefined means use the saved config. */
+const baseUrlOverride = (args: ParsedArgs): string | undefined => {
+  const fromFlag = flag(args, 'base-url')
+  if (fromFlag !== undefined) return checkBaseUrl(fromFlag, '--base-url')
+  const fromEnv = process.env.FORZ_BASE_URL
+  return fromEnv ? checkBaseUrl(fromEnv, 'FORZ_BASE_URL') : undefined
+}
+
+// Precedence: --base-url / --token flag > FORZ_BASE_URL / FORZ_TOKEN env > saved config.
+const client = async (args: ParsedArgs): Promise<ForzClient> => {
+  const baseUrl = baseUrlOverride(args)
+  const token = flag(args, 'token') ?? (process.env.FORZ_TOKEN || undefined)
+  const timeout = timeoutMs(args)
+  const cfg = await config.load()
+  cfg.baseUrl = baseUrl ?? checkBaseUrl(cfg.baseUrl, `baseUrl in ${config.configPath()}`)
+  if (token) cfg.token = token
+  if (!cfg.token) {
+    throw new UsageError('Not authenticated. Run `forz login --token <api-key>` or set FORZ_TOKEN.')
+  }
+  return ForzClient.fromConfig({ ...cfg, timeout })
 }
 
 // --- Top-level command handlers ---
 
 const login = async (args: ParsedArgs): Promise<void> => {
-  const token = typeof args.flags.token === 'string' ? args.flags.token : undefined
-  const baseUrl = typeof args.flags['base-url'] === 'string' ? args.flags['base-url'] : undefined
+  const token = flag(args, 'token')
   if (!token) {
-    throw new Error('Missing --token. Mint a key at /settings/api_keys, then run:\n  forz login --token fz_<uuid>')
+    throw new UsageError(
+      'Missing --token. Mint a key at /settings/api_keys, then run:\n  forz login --token fz_<uuid>'
+    )
   }
   if (!/^fz_[0-9a-fA-F-]{36}$/.test(token)) {
     console.error(`# warning: token does not match expected format fz_<UUIDv7>`)
   }
+  // Save the host the key is verified against (flag > env), never silently the default.
+  const baseUrl = baseUrlOverride(args)
+  // Verify against /me before saving so a typo'd key never lands in the config.
+  const c = await client({
+    ...args,
+    flags: { ...args.flags, token, ...(baseUrl ? { 'base-url': baseUrl } : {}) },
+  })
+  const res = await c.raw('/api/v2/me')
   const next = await config.update({ token, ...(baseUrl ? { baseUrl } : {}) })
   console.log(`Saved credentials to ${config.configPath()}`)
   console.log(`Base URL: ${next.baseUrl}`)
+  console.error(whoamiSummary(unwrap(res.body) as MeIdentity))
 }
 
 const logout = async (): Promise<void> => {
@@ -190,6 +293,8 @@ const whoami = async (args: ParsedArgs): Promise<void> => {
   console.error(whoamiSummary(me))
 }
 
+const CONFIG_KEYS = ['baseUrl', 'token']
+
 const configCmd = async (args: ParsedArgs): Promise<void> => {
   const [sub, key, value] = args.positional
   if (!sub || sub === 'show') {
@@ -198,103 +303,153 @@ const configCmd = async (args: ParsedArgs): Promise<void> => {
     return
   }
   if (sub === 'set') {
-    if (!key) throw new Error('Usage: forz config set <key> <value>')
-    await config.update({ [key]: value } as Partial<config.Config>)
+    if (!key || !value)
+      throw new UsageError(`Usage: forz config set <${CONFIG_KEYS.join('|')}> <value>`)
+    if (!CONFIG_KEYS.includes(key)) {
+      throw new UsageError(`Unknown config key: ${key} (known: ${CONFIG_KEYS.join(', ')})`)
+    }
+    await config.update({ [key]: key === 'baseUrl' ? checkBaseUrl(value, 'baseUrl') : value })
     console.log(`Set ${key}`)
     return
   }
-  throw new Error(`Unknown config subcommand: ${sub}`)
+  throw new UsageError(`Unknown config subcommand: ${sub}`)
 }
 
 // --- Resource dispatcher ---
 
+const is = (list: readonly string[], name: string): boolean => list.includes(name)
+
 const dispatchResource = async (resource: string, args: ParsedArgs): Promise<void> => {
   const [verb, ...rest] = args.positional
-  const c = await client(args)
+  const usage = (msg: string) =>
+    new UsageError(`${msg}\nRun \`forz ${resource} --help\` for its commands.`)
 
   // Lookups: list-only (plus `get <id>` for gettable lookups).
-  if ((LOOKUPS as readonly string[]).includes(resource)) {
-    const lookup = c.lookup(resource)
-    if (verb === 'get' && GETTABLE_LOOKUPS.has(resource)) {
+  if (is(LOOKUPS, resource)) {
+    const gettable = GETTABLE_LOOKUPS.has(resource)
+    if (verb && verb !== 'list' && !(verb === 'get' && gettable)) {
+      throw usage(`${resource} is a read-only lookup (list only${gettable ? ', get <id>' : ''}).`)
+    }
+    if (verb === 'get') {
       const [id] = rest
-      if (!id) throw new Error(`Usage: forz ${resource} get <id>`)
+      if (!id) throw usage(`Usage: forz ${resource} get <id>`)
+      const c = await client(args)
       const res = await c.raw(`/api/v2/${resource}/${encodeURIComponent(id)}`)
       print(unwrap(res.body))
       return
     }
-    if (verb && verb !== 'list') {
-      throw new Error(`Unknown verb for ${resource}: ${verb}`)
-    }
-    printPage(await lookup.list(buildListParams(args)))
+    const params = buildListParams(args)
+    printPage(await (await client(args)).lookup(resource).list(params))
     return
   }
 
-  const readonly = (READONLY_RESOURCES as readonly string[]).includes(resource)
-  if (!readonly && !(CRUD_RESOURCES as readonly string[]).includes(resource)) {
-    throw new Error(`Unknown resource: ${resource}`)
-  }
+  const readonly = is(READONLY_RESOURCES, resource)
+  const listCreate = is(LIST_CREATE_RESOURCES, resource)
   if (readonly && ['create', 'update', 'delete'].includes(verb)) {
-    throw new Error(`${resource} is read-only in API v2 (list, get, notes only).`)
+    throw usage(`${resource} is read-only in API v2 (list, get, notes only).`)
   }
-
-  const r = c.resource(resource)
+  if (listCreate && verb && !['list', 'create'].includes(verb)) {
+    throw usage(`${resource} supports only list and create in API v2.`)
+  }
 
   switch (verb) {
     case 'notes': {
-      if (NO_NOTES.has(resource)) throw new Error(`${resource} has no notes in API v2.`)
+      if (NO_NOTES.has(resource)) throw usage(`${resource} has no notes in API v2.`)
       const [id] = rest
-      if (!id) throw new Error(`Usage: forz ${resource} notes <id> [--add <text>]`)
-      const text = args.flags.add
-      if (typeof text === 'string') {
-        print(await r.createNote(id, text))
+      if (!id) throw usage(`Usage: forz ${resource} notes <id> [--add <text>]`)
+      const text = flag(args, 'add')
+      if (text !== undefined) {
+        print(await (await client(args)).resource(resource).createNote(id, text))
         return
       }
-      printPage(await r.listNotes(id, buildListParams(args)))
+      const params = buildListParams(args)
+      printPage(await (await client(args)).resource(resource).listNotes(id, params))
+      return
+    }
+    case 'linkages': {
+      if (resource !== 'contacts')
+        throw usage(`Unknown verb for ${resource}: linkages (contacts only)`)
+      const [id] = rest
+      const updateId = flag(args, 'update')
+      const deleteId = flag(args, 'delete')
+      if (!id) {
+        throw usage(
+          'Usage: forz contacts linkages <id> [--add --body J | --update <linkage_id> --body J | --delete <linkage_id>]'
+        )
+      }
+      const body = readObjectBody(args)
+      if ((args.flags.add || updateId) && !body) throw usage('--body must be a JSON object')
+      const obj = body as Record<string, unknown>
+      const r = (await client(args)).resource(resource)
+      if (args.flags.add) print(await r.createLinkage(id, obj))
+      else if (updateId) print(await r.updateLinkage(id, updateId, obj))
+      else if (deleteId) {
+        await r.deleteLinkage(id, deleteId)
+        console.log(`Deleted contacts/${id}/linkages/${deleteId}`)
+      } else print(await r.listLinkages(id))
       return
     }
     case undefined:
     case 'list': {
-      printPage(await r.list(buildListParams(args)))
+      const params = buildListParams(args)
+      printPage(await (await client(args)).resource(resource).list(params))
       return
     }
     case 'get': {
       const [id] = rest
-      if (!id) throw new Error(`Usage: forz ${resource} get <id>`)
-      const { data, etag } = await r.get(id)
+      if (!id) throw usage(`Usage: forz ${resource} get <id>`)
+      const { data, etag } = await (await client(args)).resource(resource).get(id)
       print(data)
       if (etag) console.error(`# ETag: ${etag}`)
       return
     }
     case 'create': {
-      const body = readBodyFlag(args.flags.body)
-      if (body === undefined) {
-        throw new Error(`Usage: forz ${resource} create --body JSON|@file|@-`)
+      const body = readObjectBody(args)
+      if (body === undefined) throw usage(`Usage: forz ${resource} create --body JSON|@file|@-`)
+      // Generate the financial Idempotency-Key here so a failed create can show it for a safe retry.
+      const idk =
+        flag(args, 'idempotency-key') ??
+        (FINANCIAL_RESOURCES.has(resource) ? randomUUID() : undefined)
+      const r = (await client(args)).resource(resource)
+      try {
+        print(await r.create(body, { idempotencyKey: idk }))
+      } catch (e) {
+        if (idk && e instanceof HttpError && e.code === 'idempotency_key.in_use')
+          console.error(
+            `# Idempotency-Key ${idk} was used with a different body: send that body or use a new key`
+          )
+        else if (idk)
+          console.error(`# Idempotency-Key: ${idk} (retry with --idempotency-key ${idk})`)
+        throw e
       }
-      const idk = typeof args.flags['idempotency-key'] === 'string' ? args.flags['idempotency-key'] : undefined
-      print(await r.create(body as Record<string, unknown>, { idempotencyKey: idk }))
       return
     }
     case 'update': {
       const [id] = rest
-      if (!id) throw new Error(`Usage: forz ${resource} update <id> --if-match <etag> --body JSON|@file`)
-      const body = readBodyFlag(args.flags.body)
-      if (body === undefined) throw new Error('Missing --body')
-      const ifMatch = typeof args.flags['if-match'] === 'string' ? args.flags['if-match'] : undefined
-      if (!ifMatch) throw new Error('Missing --if-match <etag> (run `get` first to obtain it).')
-      print(await r.update(id, body as Record<string, unknown>, { ifMatch }))
+      if (!id)
+        throw usage(`Usage: forz ${resource} update <id> --if-match <etag> --body JSON|@file`)
+      const body = readObjectBody(args)
+      if (body === undefined) throw usage('Missing --body')
+      const ifMatch = flag(args, 'if-match')
+      if (!ifMatch) throw usage('Missing --if-match <etag> (run `get` first to obtain it).')
+      print(
+        await (await client(args))
+          .resource(resource)
+          .update(id, body as Record<string, unknown>, { ifMatch })
+      )
       return
     }
     case 'delete': {
       const [id] = rest
-      if (!id) throw new Error(`Usage: forz ${resource} delete <id> --if-match <etag>`)
-      const ifMatch = typeof args.flags['if-match'] === 'string' ? args.flags['if-match'] : undefined
-      if (!ifMatch) throw new Error('Missing --if-match <etag> (run `get` first to obtain it).')
-      await r.delete(id, { ifMatch })
+      if (!id) throw usage(`Usage: forz ${resource} delete <id> --if-match <etag>`)
+      const ifMatch = flag(args, 'if-match')
+      if (!ifMatch) throw usage('Missing --if-match <etag> (run `get` first to obtain it).')
+      await (await client(args)).resource(resource).delete(id, { ifMatch })
       console.log(`Deleted ${resource}/${id}`)
       return
     }
     default:
-      throw new Error(`Unknown verb for ${resource}: ${verb}`)
+      throw usage(`Unknown verb for ${resource}: ${verb}`)
   }
 }
 
@@ -303,16 +458,31 @@ const dispatchResource = async (resource: string, args: ParsedArgs): Promise<voi
 const raw = async (args: ParsedArgs): Promise<void> => {
   const [pathArg] = args.positional
   if (!pathArg) {
-    throw new Error('Usage: forz raw <path> [--method GET] [--body JSON|@file] [--header.<Name> <value> ...]')
+    throw new UsageError(
+      'Usage: forz raw <path> [--method GET] [--body JSON|@file] [--header.<Name> <value> ...] [--include]'
+    )
   }
-  const method = typeof args.flags.method === 'string' ? args.flags.method : 'GET'
-  const body = readBodyFlag(args.flags.body)
+  const method = flag(args, 'method') ?? 'GET'
+  const body = readBodyFlag(args)
   const headers: Record<string, string> = {}
-  for (const [k, v] of Object.entries(args.flags)) {
-    if (k.startsWith('header.') && typeof v === 'string') headers[k.slice('header.'.length)] = v
+  for (const k of Object.keys(args.flags)) {
+    if (k.startsWith('header.')) headers[k.slice('header.'.length)] = flag(args, k) as string
   }
   const c = await client(args)
-  const res = await c.raw(pathArg, { method, body, headers })
+  // Like `gh api -i`, but on stderr so stdout stays pipeable JSON; errors too (Retry-After, request id).
+  const dump = (r: { status: number; headers: IncomingHttpHeaders }): void => {
+    if (!args.flags.include && !args.flags.i) return
+    console.error(`HTTP ${r.status}`)
+    for (const [k, v] of Object.entries(r.headers)) console.error(`${k}: ${v}`)
+  }
+  let res
+  try {
+    res = await c.raw(pathArg, { method, body, headers })
+  } catch (e) {
+    if (e instanceof HttpError) dump(e)
+    throw e
+  }
+  dump(res)
   print(res.body)
 }
 
@@ -332,11 +502,28 @@ Top-level commands:
   whoami                                           Show the account/user this key belongs to
   config [show]                                    Print current config (token redacted)
   config set <key> <value>                         Update a config value
-  raw <path> [--method M] [--body J] [--header.<Name> <value>]  Call any v2 path
-  help                                             Show this help
+  raw <path> [--method M] [--body J] [--header.<Name> <value>] [--include|-i]
+                                                   Call any v2 path; --include prints status + headers
+                                                   to stderr. The token is only sent to the base URL's origin.
+  version | --version | -v                         Print the CLI version
+  help | <resource> --help                         Show this help / one resource's commands (no network)
+
+Global flags:
+  --base-url URL, --token KEY                      Override config for one call (flag > env > config)
+  --timeout <sec>                                  Request timeout (default 30; also FORZ_TIMEOUT)
+
+Environment:
+  FORZ_TOKEN, FORZ_BASE_URL, FORZ_TIMEOUT
 
 Resources (full CRUD: list, get, create, update, delete, notes; items has no notes):
   ${CRUD_RESOURCES.join(', ')}
+
+Contacts also have linkages (the Customer / Lead / Site records a contact is linked to):
+  contacts linkages <id> [--add --body J | --update <linkage_id> --body J | --delete <linkage_id>]
+
+List + create only: ${LIST_CREATE_RESOURCES.join(
+    ', '
+  )} (list --filter.site_id|--filter.customer_id <uuid>)
 
 Read-only resources (list, get, notes):
   ${READONLY_RESOURCES.join(', ')}
@@ -356,7 +543,10 @@ Examples:
   forz jobs notes <id>                          # list comments on a record
   forz jobs notes <id> --add "Called back, wants a quote by Friday"
   forz custom_field_definitions get 0190a1b2-9c3d-7e4f-8a1b-2c3d4e5f6071
+  forz contacts linkages <id> --add --body '{"linkable_type":"Customer","linkable_id":"<uuid>"}'
+  forz systems list --filter.site_id <site-id>
   forz raw /api/v2/system_options
+  forz raw /api/v2/customers/<id> --include      # status + headers (ETag) on stderr
 
 Conventions:
   - Record ids are UUIDs (e.g. 0190a1b2-9c3d-7e4f-8a1b-2c3d4e5f6071).
@@ -367,26 +557,105 @@ Conventions:
   - List responses paginate via --cursor; --limit max 100 (default 25).
   - List filtering/sorting/search (per-endpoint allow-list): --sort <field> ascending
     (--sort=-<field> for descending), --q <text> free-text, and --filter.<key> <value> with
-    operators --filter.<key>[gte|lte|gt|lt|in] <value>. An unknown --sort field is a 400, but
-    an unknown filter key is silently ignored (you get the unfiltered list). Lookups labels,
+    operators --filter.<key>[gte|lte|gt|lt|in] <value>. An unknown --sort field is 400
+    sort.invalid; an unknown filter/query key is 400 filter.invalid naming the allowed keys. Lookups labels,
     statuses and custom_field_definitions accept --filter.related_name <Type>.
   - create/update bodies are sent under the singular resource key ({"job":{...}}); pass
-    flat fields or the wrapped form. Via raw, wrap yourself or lineitems are dropped.
+    flat fields or the wrapped form (raw bodies may be flat too).
   - Errors are RFC 9457 problem+json with a stable dotted \`code\` (e.g. validation.failed).
   - Nested arrays (lineitems, contact phone_numbers) and labels / project user_ids replace
     the whole list: an existing entry absent from what you send is removed. Omit the key to
     leave the list untouched; send [] to clear it. \`get\` first and echo back what you keep.
   - custom_fields merges per key (null clears one); keys are field ids from
     custom_field_definitions. Unaccepted body keys are silently ignored (200, no 422).
-  - Config file: ~/.forz/config.json
+  - Failed financial creates print the Idempotency-Key used on stderr; retry with the same key.
+  - 429/503 are retried up to 3 times (502/504 too for GET or with an Idempotency-Key),
+    honoring Retry-After.
+  - Config file: ~/.forz/config.json (mode 0600)
+  - Exit codes: 0 success, 1 API/network error, 2 usage error.
 `)
+}
+
+const RESOURCE_HELP: Record<string, string> = {
+  crud: `list [--limit N] [--cursor C] [--sort F] [--q T] [--filter.<key> V]
+  get <id>                                   ETag printed on stderr
+  create --body JSON|@file|@-
+  update <id> --if-match <etag> --body JSON|@file
+  delete <id> --if-match <etag>`,
+  notes: `notes <id> [--limit N] [--cursor C]        list comments
+  notes <id> --add <text>                    add a comment`,
+}
+
+const resourceHelp = (resource: string): void => {
+  const lines = [`Usage: forz ${resource} <verb> [args]`, '']
+  if (is(LOOKUPS, resource)) {
+    lines.push('  list [--limit N] [--cursor C] [--filter.<key> V]')
+    if (GETTABLE_LOOKUPS.has(resource)) lines.push('  get <id>')
+  } else if (is(LIST_CREATE_RESOURCES, resource)) {
+    lines.push(
+      '  list [--limit N] [--cursor C] [--filter.site_id <uuid>] [--filter.customer_id <uuid>]'
+    )
+    lines.push('  create --body JSON|@file|@-')
+  } else if (is(READONLY_RESOURCES, resource)) {
+    lines.push('  list [--limit N] [--cursor C]', '  get <id>', `  ${RESOURCE_HELP.notes}`)
+  } else {
+    lines.push(`  ${RESOURCE_HELP.crud}`)
+    if (!NO_NOTES.has(resource)) lines.push(`  ${RESOURCE_HELP.notes}`)
+    if (FINANCIAL_RESOURCES.has(resource))
+      lines.push('  create auto-sets an Idempotency-Key; override with --idempotency-key <key>')
+    if (resource === 'contacts') {
+      lines.push(
+        '  linkages <id>                              list linked Customers / Leads / Sites',
+        '  linkages <id> --add --body \'{"linkable_type":"Customer","linkable_id":"<uuid>"}\'',
+        '  linkages <id> --update <linkage_id> --body \'{"primary":true}\'',
+        '  linkages <id> --delete <linkage_id>'
+      )
+    }
+  }
+  console.log(lines.join('\n'))
+}
+
+const version = (): void => {
+  const pkg = JSON.parse(readFileSync(path.join(__dirname, '../../../package.json'), 'utf8'))
+  console.log(pkg.version)
+}
+
+const COMMANDS = ['login', 'logout', 'ping', 'whoami', 'config', 'raw', 'help', 'version']
+const RESOURCES: readonly string[] = [
+  ...CRUD_RESOURCES,
+  ...LIST_CREATE_RESOURCES,
+  ...READONLY_RESOURCES,
+  ...LOOKUPS,
+]
+
+const editDistance = (a: string, b: string): number => {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j)
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i]
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1))
+    }
+    prev = cur
+  }
+  return prev[b.length]
+}
+
+export const suggest = (cmd: string): string | undefined => {
+  const [best] = [...COMMANDS, ...RESOURCES]
+    .map((c) => ({ c, d: editDistance(cmd, c) }))
+    .sort((x, y) => x.d - y.d)
+  return best && best.d <= Math.max(2, Math.floor(cmd.length / 3)) ? best.c : undefined
 }
 
 export const dispatch = async (argv: string[]): Promise<void> => {
   const [cmd, ...rest] = argv
   const args = parseArgs(rest)
+  const wantsHelp = args.flags.help === true || args.flags.h === true
 
   if (cmd === undefined || cmd === 'help' || cmd === '-h' || cmd === '--help') return help()
+  if (cmd === 'version' || cmd === '--version' || cmd === '-v') return version()
+  if (RESOURCES.includes(cmd)) return wantsHelp ? resourceHelp(cmd) : dispatchResource(cmd, args)
+  if (COMMANDS.includes(cmd) && wantsHelp) return help()
   if (cmd === 'login') return login(args)
   if (cmd === 'logout') return logout()
   if (cmd === 'ping') return ping(args)
@@ -394,16 +663,12 @@ export const dispatch = async (argv: string[]): Promise<void> => {
   if (cmd === 'config') return configCmd(args)
   if (cmd === 'raw') return raw(args)
 
-  if (
-    (CRUD_RESOURCES as readonly string[]).includes(cmd) ||
-    (READONLY_RESOURCES as readonly string[]).includes(cmd) ||
-    (LOOKUPS as readonly string[]).includes(cmd)
-  ) {
-    return dispatchResource(cmd, args)
-  }
-
-  help()
-  throw new Error(`Unknown command: ${cmd}`)
+  const guess = suggest(cmd)
+  throw new UsageError(
+    `Unknown command: ${cmd}${
+      guess ? `. Did you mean \`forz ${guess}\`?` : ''
+    }\nRun \`forz help\` for usage.`
+  )
 }
 
 /**
@@ -418,7 +683,9 @@ const formatFieldErrors = (body: unknown): string | undefined => {
   if (!errors || typeof errors !== 'object') return undefined
   if (Array.isArray(errors)) {
     const lines = errors
-      .filter((e): e is { field?: string; code?: string; detail?: string } => !!e && typeof e === 'object')
+      .filter(
+        (e): e is { field?: string; code?: string; detail?: string } => !!e && typeof e === 'object'
+      )
       .map((e) => `  ${e.field ?? '?'}: ${e.detail ?? e.code ?? ''}`)
     return lines.length ? lines.join('\n') : undefined
   }
@@ -440,9 +707,27 @@ export const formatError = (e: unknown): string => {
       const detail = typeof body.detail === 'string' ? `\n${body.detail}` : ''
       return `HTTP ${e.status}${code}: ${body.title || e.message}${detail}\n${fields}`
     }
-    const detail = typeof e.body === 'string' ? e.body : JSON.stringify(e.body, null, 2)
-    return `HTTP ${e.status}${code}: ${e.message}\n${detail}`
+    let detail: string
+    if (typeof e.body === 'string') {
+      // Non-JSON (e.g. a Rails HTML 500 page): show the head, not 120 KB.
+      const ct = e.headers?.['content-type'] ?? 'unknown content-type'
+      detail =
+        e.body.length > 500
+          ? `${e.body.slice(0, 500)}\n… (${ct}, ${e.body.length} chars, truncated)`
+          : e.body
+    } else detail = JSON.stringify(e.body, null, 2)
+    const location = e.headers?.location ? `\nLocation: ${e.headers.location}` : ''
+    const retryAfter = e.headers?.['retry-after']
+    const hint =
+      e.status === 401
+        ? '\nHint: the API key is missing, invalid or revoked — check `forz login`, FORZ_TOKEN or --token.'
+        : e.status === 429
+        ? `\nHint: rate limited${
+            retryAfter ? `; retry after ${retryAfter}s` : ''
+          } — slow down or retry later.`
+        : ''
+    return `HTTP ${e.status}${code}: ${e.message}${location}\n${detail}${hint}`
   }
-  if (e instanceof Error) return e.message
+  if (e instanceof Error) return e.message || String((e as NodeJS.ErrnoException).code ?? e.name)
   return String(e)
 }

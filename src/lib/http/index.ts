@@ -8,6 +8,8 @@ export interface RequestOptions {
   body?: unknown
   token?: string
   query?: { [key: string]: string | number | boolean | undefined }
+  /** Socket idle timeout in ms; unset = none. */
+  timeout?: number
 }
 
 export interface Response<T> {
@@ -22,19 +24,42 @@ export class HttpError extends Error {
   body: unknown
   /** Stable error code from RFC 9457 `application/problem+json` body. */
   code?: string
-  constructor(status: number, body: unknown, message: string) {
+  /** Response headers (Retry-After, ETag, Location, content-type, …). */
+  headers: http.IncomingHttpHeaders
+  constructor(
+    status: number,
+    body: unknown,
+    message: string,
+    headers: http.IncomingHttpHeaders = {}
+  ) {
     super(message)
     this.name = 'HttpError'
     this.status = status
     this.body = body
+    this.headers = headers
     if (body && typeof body === 'object' && typeof (body as { code?: unknown }).code === 'string') {
       this.code = (body as { code: string }).code
     }
   }
 }
 
+/** Bad invocation (exit code 2), as opposed to an API/network failure (exit code 1). */
+export class UsageError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'UsageError'
+  }
+}
+
+const ABSOLUTE = /^[a-z][a-z0-9+.-]*:\/\//i
+
+/** Strip trailing slashes and a trailing `/api/v2` (paths already carry it). */
+export const normalizeBaseUrl = (url: string): string =>
+  url.replace(/\/+$/, '').replace(/\/api\/v2$/i, '')
+
 const buildUrl = (baseUrl: string, p: string, query?: RequestOptions['query']): URL => {
-  const url = new URL(p.startsWith('http') ? p : `${baseUrl.replace(/\/$/, '')}${p}`)
+  const base = normalizeBaseUrl(baseUrl)
+  const url = new URL(ABSOLUTE.test(p) ? p : `${base}${p.startsWith('/') ? '' : '/'}${p}`)
   if (query) {
     for (const [k, v] of Object.entries(query)) {
       if (v === undefined) continue
@@ -58,13 +83,66 @@ const parseBody = (raw: string, contentType?: string): unknown => {
   return raw
 }
 
-export const request = <T = unknown>(
+const RETRY_MAX = 3
+
+/** 429/503 are always safe to retry; 502/504 only when a replay can't double-apply. */
+const retryable = (status: number, method: string, idempotent: boolean): boolean =>
+  status === 429 ||
+  status === 503 ||
+  ((status === 502 || status === 504) && (method === 'GET' || idempotent))
+
+/** Retry-After (seconds or HTTP-date), else exponential backoff with jitter. */
+export const retryDelayMs = (attempt: number, retryAfter?: string): number => {
+  if (retryAfter) {
+    const secs = Number(retryAfter)
+    const ms = Number.isFinite(secs) ? secs * 1000 : Date.parse(retryAfter) - Date.now()
+    // ponytail: capped at 60s so a hostile/buggy header can't park the CLI for hours.
+    if (!Number.isNaN(ms)) return Math.min(Math.max(ms, 0), 60_000)
+  }
+  return 2 ** attempt * 500 + Math.random() * 250
+}
+
+export const request = async <T = unknown>(
   baseUrl: string,
   path: string,
   options: RequestOptions = {}
-): Promise<Response<T>> =>
+): Promise<Response<T>> => {
+  const method = (options.method || 'GET').toUpperCase()
+  const idempotent = Object.keys(options.headers || {}).some(
+    (k) => k.toLowerCase() === 'idempotency-key'
+  )
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await once<T>(baseUrl, path, options)
+    } catch (e) {
+      if (
+        !(e instanceof HttpError) ||
+        attempt >= RETRY_MAX ||
+        !retryable(e.status, method, idempotent)
+      )
+        throw e
+      const retryAfter = e.headers['retry-after']
+      await new Promise((r) =>
+        setTimeout(
+          r,
+          retryDelayMs(attempt, typeof retryAfter === 'string' ? retryAfter : undefined)
+        )
+      )
+    }
+  }
+}
+
+const once = <T>(baseUrl: string, path: string, options: RequestOptions): Promise<Response<T>> =>
   new Promise((resolve, reject) => {
     const url = buildUrl(baseUrl, path, options.query)
+    // Never hand the Bearer token to a host other than the configured API.
+    if (options.token && url.origin !== new URL(normalizeBaseUrl(baseUrl)).origin) {
+      throw new UsageError(
+        `Refusing to send the API token to ${url.origin} (base URL is ${normalizeBaseUrl(
+          baseUrl
+        )}).`
+      )
+    }
     const lib = url.protocol === 'http:' ? http : https
     const method = (options.method || 'GET').toUpperCase()
 
@@ -101,13 +179,33 @@ export const request = <T = unknown>(
           if (status >= 200 && status < 300) {
             resolve({ status, headers: res.headers, body, raw })
           } else {
-            reject(new HttpError(status, body, `${method} ${url.pathname} → HTTP ${status}`))
+            reject(
+              new HttpError(status, body, `${method} ${url.pathname} → HTTP ${status}`, res.headers)
+            )
           }
         })
       }
     )
 
-    req.on('error', reject)
+    // Node's ECONNREFUSED can be an AggregateError with an empty message; name code + host.
+    req.on('error', (e: NodeJS.ErrnoException) =>
+      reject(
+        Object.assign(new Error(`${method} ${url.host}: ${e.message || e.code}`), { code: e.code })
+      )
+    )
+    // Wall-clock deadline, not req.setTimeout: Node 19+'s keep-alive globalAgent sets a 5s
+    // socket idle timeout that would fire first and be misreported as ours.
+    const timeout = options.timeout
+    if (timeout) {
+      const timer = setTimeout(
+        () =>
+          req.destroy(
+            Object.assign(new Error(`timed out after ${timeout / 1000}s`), { code: 'ETIMEDOUT' })
+          ),
+        timeout
+      )
+      req.on('close', () => clearTimeout(timer))
+    }
     if (payload) req.write(payload)
     req.end()
   })

@@ -95,7 +95,9 @@ describe('forz whoami (handler)', () => {
   it('propagates an auth error (so the CLI exits non-zero) and prints nothing to stdout', async () => {
     const raw = jest
       .fn()
-      .mockRejectedValue(new HttpError(401, { code: 'auth.invalid_token' }, 'Invalid or expired API key'))
+      .mockRejectedValue(
+        new HttpError(401, { code: 'auth.invalid_token' }, 'Invalid or expired API key')
+      )
     fromConfigMock.mockReturnValue({ raw })
 
     await expect(dispatch(['whoami'])).rejects.toBeInstanceOf(HttpError)

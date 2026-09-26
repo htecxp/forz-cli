@@ -24,3 +24,16 @@ describe('parseArgs', () => {
     expect(r.positional).toEqual([])
   })
 })
+
+describe('parseArgs dash-leading values', () => {
+  it('keeps a value that starts with a single dash', () => {
+    const r = parseArgs(['--sort', '-created_at', '--add', '-foo', '--body', '@-'])
+    expect(r.flags).toEqual({ sort: '-created_at', add: '-foo', body: '@-' })
+  })
+
+  it('does not consume a following --flag, and boolean flags never take a value', () => {
+    const r = parseArgs(['--add', '--body', '{}', '--include', '/api/v2/me'])
+    expect(r.flags).toEqual({ add: true, body: '{}', include: true })
+    expect(r.positional).toEqual(['/api/v2/me'])
+  })
+})

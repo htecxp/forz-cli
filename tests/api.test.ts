@@ -48,9 +48,9 @@ describe('optimistic concurrency guards', () => {
   it('refuses update without an If-Match ETag and never calls the API', async () => {
     const client = new ForzClient({ token: 'fz_x' })
     const rawSpy = jest.spyOn(client, 'raw')
-    await expect(
-      client.resource('customers').update('x', { organization: 'New' })
-    ).rejects.toThrow(/If-Match/)
+    await expect(client.resource('customers').update('x', { organization: 'New' })).rejects.toThrow(
+      /If-Match/
+    )
     expect(rawSpy).not.toHaveBeenCalled()
   })
 
@@ -109,12 +109,14 @@ describe('idempotency scoping', () => {
 describe('list pagination', () => {
   it('unwraps {data, has_more} and extracts the next cursor from the Link header', async () => {
     const client = new ForzClient({ token: 'fz_x' })
-    jest.spyOn(client, 'raw').mockResolvedValue(
-      stubResponse(
-        { data: [{ id: '1' }], has_more: true },
-        { link: '<https://app.forz.io/api/v2/customers?cursor=ABC&limit=25>; rel="next"' }
+    jest
+      .spyOn(client, 'raw')
+      .mockResolvedValue(
+        stubResponse(
+          { data: [{ id: '1' }], has_more: true },
+          { link: '<https://app.forz.io/api/v2/customers?cursor=ABC&limit=25>; rel="next"' }
+        )
       )
-    )
     const page = await client.resource('customers').list({ limit: 25 })
     expect(page.data).toEqual([{ id: '1' }])
     expect(page.hasMore).toBe(true)

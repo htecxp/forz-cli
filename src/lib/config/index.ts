@@ -21,7 +21,15 @@ const defaults: Config = {
 export const load = async (): Promise<Config> => {
   try {
     const raw = await fs.readFile(configPath(), { encoding: 'utf8' })
-    return { ...defaults, ...JSON.parse(raw) }
+    try {
+      return { ...defaults, ...JSON.parse(raw) }
+    } catch (e: unknown) {
+      throw new Error(
+        `Invalid JSON in ${configPath()}: ${
+          (e as Error).message
+        }. Fix it or run \`forz logout\` to reset.`
+      )
+    }
   } catch (e: unknown) {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { ...defaults }
     throw e
@@ -30,7 +38,12 @@ export const load = async (): Promise<Config> => {
 
 export const save = async (config: Config): Promise<void> => {
   await fs.mkdir(configDir(), { recursive: true, mode: 0o700 })
-  await fs.writeFile(configPath(), JSON.stringify(config, null, 2), { mode: 0o600 })
+  await fs.chmod(configDir(), 0o700)
+  // tmp + rename: a crash mid-write never leaves a truncated config; the new file is 0600.
+  const tmp = `${configPath()}.${process.pid}.tmp`
+  await fs.writeFile(tmp, JSON.stringify(config, null, 2), { mode: 0o600 })
+  await fs.chmod(tmp, 0o600)
+  await fs.rename(tmp, configPath())
 }
 
 export const update = async (patch: Partial<Config>): Promise<Config> => {
