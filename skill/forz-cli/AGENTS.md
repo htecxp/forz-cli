@@ -335,8 +335,11 @@ body is silently ignored (you can't mark an invoice Paid via the API).
 **Labels / custom fields:** `labels` replaces the full list — send every label you want to keep,
 `[]` clears; values are Label `display_name`s from `forz labels list --filter.related_name <Type>`.
 Project `user_ids` also replaces the whole team. `custom_fields` merges: only the keys you send
-change and `null` clears one. Its keys are the field `id`s (`fields[].id`) from
-`forz custom_field_definitions list --filter.related_name <Type>`, not the labels.
+change and `null` clears one. The API keys it by field `id` (`fields[].id` from
+`forz custom_field_definitions list --filter.related_name <Type>`); the CLI's `create`/`update`
+also accept the field label (case-insensitive) and resolve it to the id, e.g.
+`--body '{"custom_fields":{"Invoice Number":"INV-1"}}'`. An unknown label is a usage error
+listing the resource's fields. `raw` does not resolve labels.
 Values are typed by the field's `field_type`:
 
 | field_type | JSON value |
@@ -346,12 +349,24 @@ Values are typed by the field's `field_type`:
 | `date` | `"YYYY-MM-DD"` |
 | `dropdown` | one string from the field's `options` |
 | `multiselect` | array of strings, each from `options` |
-| `attachment` | read-only; any write is a 422 |
+| `attachment` | not settable in a JSON body (422); upload with `attach` (below) |
 
 A wrong type, an unknown id or a value outside `options` is a 422 whose `errors` key is
 `custom_fields.<field_id>`, and the whole write is rejected (valid keys in the same body are not
-applied). `custom_fields` works on create too. Lists can't be filtered by a custom field
-(`--filter.<field_id>` is a 400 `filter.invalid`).
+applied). `custom_fields` works on create too.
+
+**Filter by custom field:** `--filter.custom_fields[<field id|label>] <value>` on any list of
+customers, sites, contacts, jobs, estimates, invoices, sales_orders, items, leads, deals or
+systems. Repeat to AND several. Checkbox values are `true`/`false`, dates `YYYY-MM-DD`,
+multiselect matches records containing the value, others match exactly. An unknown field, a
+bad checkbox/date value or an attachment field is a 400 `filter.invalid`. Quote the flag in
+zsh (`'--filter.custom_fields[Tier]' Gold`), which otherwise globs the brackets.
+
+**Attachment fields:** `forz <resource> attach <id> <field id|label> --file <path> --if-match <etag>`
+uploads a file (max 10 MB) as multipart; `--clear` instead of `--file` removes it. It prints the
+record and the new ETag. Available on customers, sites, contacts, jobs, estimates, invoices,
+sales_orders, items, leads and deals. The stored value is `{url, filename}`; the URL is a signed
+link readable without an API key, so treat it as shareable.
 
 ## Working style
 

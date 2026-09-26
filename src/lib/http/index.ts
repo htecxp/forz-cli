@@ -156,9 +156,12 @@ const once = <T>(baseUrl: string, path: string, options: RequestOptions): Promis
     }
     if (options.token) headers['Authorization'] = `Bearer ${options.token}`
 
-    let payload: string | undefined
+    let payload: string | Buffer | undefined
     if (options.body !== undefined && options.body !== null) {
-      payload = typeof options.body === 'string' ? options.body : JSON.stringify(options.body)
+      payload =
+        typeof options.body === 'string' || Buffer.isBuffer(options.body)
+          ? options.body
+          : JSON.stringify(options.body)
       if (!headers['Content-Type']) headers['Content-Type'] = 'application/json'
       headers['Content-Length'] = String(Buffer.byteLength(payload))
     }

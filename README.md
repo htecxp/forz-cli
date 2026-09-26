@@ -106,6 +106,10 @@ forz <resource> notes <id> [--limit N] [--cursor C]   # list comments on a recor
 forz <resource> notes <id> --add "<text>"               # add a comment
 forz custom_field_definitions get <id>          # gettable lookup
 
+forz customers update <id> --if-match <etag> --body '{"custom_fields":{"Tier":"Gold"}}'   # field label or id
+forz customers list '--filter.custom_fields[Tier]' Gold            # quote in zsh
+forz customers attach <id> "Contract" --file ./contract.pdf --if-match <etag>
+
 forz contacts linkages <id>                     # list the records a contact is linked to
 forz contacts linkages <id> --add --body '{"linkable_type":"Customer","linkable_id":"<uuid>"}'
 forz contacts linkages <id> --update <linkage_id> --body '{"primary":true}'

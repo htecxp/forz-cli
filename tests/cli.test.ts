@@ -105,6 +105,87 @@ describe('forz CLI surface', () => {
     })
   })
 
+  it('resolves custom field labels to ids on create/update', async () => {
+    const ID = '01a0def8-32c8-7de7-8da2-322c2dc3182c'
+    const OTHER = '01a0def8-3294-7f24-9f22-8b370b36a54c'
+    const defs = jest.fn().mockResolvedValue({
+      data: [{ parent_id: null, fields: [{ id: ID, label: 'Tier' }] }],
+    })
+    const update = jest.fn().mockResolvedValue({})
+    fromConfigMock.mockReturnValue({ lookup: () => ({ list: defs }), resource: () => ({ update }) })
+    await dispatch([
+      'sales_orders',
+      'update',
+      's1',
+      '--if-match',
+      'e',
+      '--token',
+      't',
+      '--body',
+      `{"sales_order":{"custom_fields":{" tier ":"Gold","${OTHER}":null}}}`,
+    ])
+    expect(defs).toHaveBeenCalledWith({ related_name: 'SalesOrder', limit: 100 })
+    expect(update.mock.calls[0][1]).toEqual({
+      sales_order: { custom_fields: { [ID]: 'Gold', [OTHER]: null } },
+    })
+    await expect(
+      dispatch([
+        'sales_orders',
+        'update',
+        's1',
+        '--if-match',
+        'e',
+        '--token',
+        't',
+        '--body',
+        '{"custom_fields":{"Nope":1}}',
+      ])
+    ).rejects.toThrow(/Unknown custom field "Nope" on sales_orders. Fields: "Tier"/)
+  })
+
+  it('attach uploads by field label; list resolves custom_fields[<label>] filters', async () => {
+    const ID = '01a0df3d-2931-7a88-b8bb-37f0baba8fad'
+    const defs = jest.fn().mockResolvedValue({
+      data: [{ parent_id: null, fields: [{ id: ID, label: 'Contract' }] }],
+    })
+    const setCustomFieldAttachment = jest.fn().mockResolvedValue({ data: {}, etag: 'e2' })
+    const list = jest.fn().mockResolvedValue({ data: [], hasMore: false })
+    fromConfigMock.mockReturnValue({
+      lookup: () => ({ list: defs }),
+      resource: () => ({ setCustomFieldAttachment, list }),
+    })
+    await dispatch([
+      'customers',
+      'attach',
+      'c1',
+      'contract',
+      '--file',
+      'package.json',
+      '--if-match',
+      'e1',
+      '--token',
+      't',
+    ])
+    const [id, field, file, opts] = setCustomFieldAttachment.mock.calls[0]
+    expect([id, field, file.filename, opts]).toEqual(['c1', ID, 'package.json', { ifMatch: 'e1' }])
+    expect(Buffer.isBuffer(file.data)).toBe(true)
+    await dispatch(['customers', 'list', '--filter.custom_fields[Contract]', 'x', '--token', 't'])
+    expect(list).toHaveBeenCalledWith({ [`custom_fields[${ID}]`]: 'x' })
+    await expect(
+      dispatch([
+        'customers',
+        'attach',
+        'c1',
+        'contract',
+        '--file',
+        'x',
+        '--clear',
+        '--if-match',
+        'e',
+      ])
+    ).rejects.toBeInstanceOf(UsageError)
+  })
+
   it('prints the auto-generated Idempotency-Key when a financial create fails', async () => {
     const create = jest.fn().mockRejectedValue(new HttpError(502, null, 'boom'))
     fromConfigMock.mockReturnValue({ resource: () => ({ create }) })

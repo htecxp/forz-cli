@@ -62,6 +62,20 @@ export interface ContactLinkage {
 /** Resources that require an `Idempotency-Key` on POST (financial). */
 export const FINANCIAL_RESOURCES = new Set(['invoices', 'sales_orders'])
 
+/** Resources whose attachment-type custom fields can be uploaded via the API. */
+export const ATTACHABLE_RESOURCES = new Set([
+  'customers',
+  'sites',
+  'contacts',
+  'jobs',
+  'estimates',
+  'invoices',
+  'sales_orders',
+  'items',
+  'leads',
+  'deals',
+])
+
 const parseLinkNextCursor = (link?: string): string | undefined => {
   if (!link) return undefined
   // RFC 5988 `Link: <url>; rel="next"` — extract `cursor` query param.
@@ -151,6 +165,59 @@ export class Resource<T = Record<string, unknown>> {
       headers: { 'If-Match': options.ifMatch },
     })
     return unwrap<T>(res.body)
+  }
+
+  /**
+   * PUT /api/v2/<resource>/{id}/custom_fields/{field_id} — upload a file into an
+   * attachment-type custom field (multipart `file` part). Returns the updated record.
+   */
+  async setCustomFieldAttachment(
+    id: string,
+    fieldId: string,
+    file: { filename: string; data: Buffer },
+    options: MutationOptions
+  ): Promise<Fetched<T>> {
+    const boundary = `forz-${randomUUID()}`
+    const name = file.filename.replace(/["\r\n]/g, '_')
+    const body = Buffer.concat([
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${name}"\r\n` +
+          'Content-Type: application/octet-stream\r\n\r\n'
+      ),
+      file.data,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ])
+    const res = await this.client.raw<{ data: T } | T>(this.cfPath(id, fieldId), {
+      method: 'PUT',
+      body,
+      headers: {
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'If-Match': this.requireIfMatch('setCustomFieldAttachment', options),
+      },
+    })
+    return { data: unwrap<T>(res.body), etag: res.headers.etag as string | undefined }
+  }
+
+  /** DELETE /api/v2/<resource>/{id}/custom_fields/{field_id} — clear an attachment field. */
+  async clearCustomFieldAttachment(
+    id: string,
+    fieldId: string,
+    options: MutationOptions
+  ): Promise<Fetched<T>> {
+    const res = await this.client.raw<{ data: T } | T>(this.cfPath(id, fieldId), {
+      method: 'DELETE',
+      headers: { 'If-Match': this.requireIfMatch('clearCustomFieldAttachment', options) },
+    })
+    return { data: unwrap<T>(res.body), etag: res.headers.etag as string | undefined }
+  }
+
+  private cfPath(id: string, fieldId: string): string {
+    return `${this.path(id)}/custom_fields/${encodeURIComponent(fieldId)}`
+  }
+
+  private requireIfMatch(op: string, options: MutationOptions): string {
+    if (!options.ifMatch) throw new Error(`${this.name}.${op} requires an ETag (options.ifMatch)`)
+    return options.ifMatch
   }
 
   /** GET /api/v2/<resource>/{id}/notes — user-authored comments on a record. */

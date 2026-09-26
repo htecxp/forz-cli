@@ -3,7 +3,7 @@ import { readFileSync } from 'fs'
 import { IncomingHttpHeaders } from 'http'
 import path from 'path'
 
-import { FINANCIAL_RESOURCES, ForzClient } from '../../api'
+import { ATTACHABLE_RESOURCES, FINANCIAL_RESOURCES, ForzClient } from '../../api'
 import * as config from '../config'
 import { HttpError, normalizeBaseUrl, UsageError } from '../http'
 
@@ -166,6 +166,73 @@ const readObjectBody = (args: ParsedArgs): Record<string, unknown> | undefined =
   if (!body || typeof body !== 'object' || Array.isArray(body))
     throw new UsageError('--body must be a JSON object')
   return body as Record<string, unknown>
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+type CfTemplate = { parent_id: string | null; fields: { id: string; label: string }[] }
+
+/**
+ * Custom fields may be named by label as well as id: returns a resolver mapping a non-UUID
+ * key (case-insensitively) to its field id via custom_field_definitions, fetched once, lazily.
+ */
+const customFieldResolver = (c: ForzClient, resource: string) => {
+  let fields: CfTemplate['fields'] | undefined
+  return async (key: string): Promise<string> => {
+    if (UUID_RE.test(key)) return key
+    if (!fields) {
+      // customers → Customer, sales_orders → SalesOrder (the template's related_name).
+      const relatedName = resource
+        .replace(/s$/, '')
+        .split('_')
+        .map((w) => w[0].toUpperCase() + w.slice(1))
+        .join('')
+      const { data } = await c
+        .lookup<CfTemplate>('custom_field_definitions')
+        .list({ related_name: relatedName, limit: 100 })
+      fields = ([] as CfTemplate['fields']).concat(
+        ...data.filter((t) => !t.parent_id).map((t) => t.fields)
+      )
+    }
+    const hit = fields.find((f) => f.label.trim().toLowerCase() === key.trim().toLowerCase())
+    if (hit) return hit.id
+    const known = fields.map((f) => `"${f.label}"`).join(', ') || 'none defined'
+    throw new UsageError(`Unknown custom field "${key}" on ${resource}. Fields: ${known}`)
+  }
+}
+
+/** Resolve label keys in a create/update body's `custom_fields` (flat or wrapped). Mutates `body`. */
+const resolveCustomFieldLabels = async (
+  c: ForzClient,
+  resource: string,
+  body: Record<string, unknown>
+): Promise<void> => {
+  const wrapped = body[resource.replace(/s$/, '')]
+  const target = (wrapped && typeof wrapped === 'object' ? wrapped : body) as Record<
+    string,
+    unknown
+  >
+  const cf = target.custom_fields
+  if (!cf || typeof cf !== 'object' || Array.isArray(cf)) return
+  const resolve = customFieldResolver(c, resource)
+  const resolved: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(cf as Record<string, unknown>)) resolved[await resolve(k)] = v
+  target.custom_fields = resolved
+}
+
+/** `--filter.custom_fields[<label>] v` → `custom_fields[<field id>]=v`. Mutates `params`. */
+const resolveCustomFieldFilters = async (
+  c: ForzClient,
+  resource: string,
+  params: Record<string, unknown>
+): Promise<void> => {
+  const resolve = customFieldResolver(c, resource)
+  for (const k of Object.keys(params)) {
+    const m = /^custom_fields\[(.+)\]$/.exec(k)
+    if (!m || UUID_RE.test(m[1])) continue
+    params[`custom_fields[${await resolve(m[1])}]`] = params[k]
+    delete params[k]
+  }
 }
 
 const buildListParams = (
@@ -395,7 +462,42 @@ const dispatchResource = async (resource: string, args: ParsedArgs): Promise<voi
     case undefined:
     case 'list': {
       const params = buildListParams(args)
-      printPage(await (await client(args)).resource(resource).list(params))
+      const c = await client(args)
+      await resolveCustomFieldFilters(c, resource, params)
+      printPage(await c.resource(resource).list(params))
+      return
+    }
+    case 'attach': {
+      if (!ATTACHABLE_RESOURCES.has(resource))
+        throw usage(`${resource} has no attachment custom fields via the API`)
+      const [id, field] = rest
+      const file = flag(args, 'file')
+      if (!id || !field || (!file && !args.flags.clear) || (file && args.flags.clear))
+        throw usage(
+          `Usage: forz ${resource} attach <id> <field id|label> (--file <path> | --clear) --if-match <etag>`
+        )
+      const ifMatch = flag(args, 'if-match')
+      if (!ifMatch) throw usage('Missing --if-match <etag> (run `get` first to obtain it).')
+      let data: Buffer | undefined
+      try {
+        data = file ? readFileSync(file) : undefined
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === 'ENOENT') throw usage(`--file not found: ${file}`)
+        throw e
+      }
+      const c = await client(args)
+      const fieldId = await customFieldResolver(c, resource)(field)
+      const r = c.resource(resource)
+      const res = data
+        ? await r.setCustomFieldAttachment(
+            id,
+            fieldId,
+            { filename: path.basename(file as string), data },
+            { ifMatch }
+          )
+        : await r.clearCustomFieldAttachment(id, fieldId, { ifMatch })
+      print(res.data)
+      if (res.etag) console.error(`# ETag: ${res.etag}`)
       return
     }
     case 'get': {
@@ -413,7 +515,9 @@ const dispatchResource = async (resource: string, args: ParsedArgs): Promise<voi
       const idk =
         flag(args, 'idempotency-key') ??
         (FINANCIAL_RESOURCES.has(resource) ? randomUUID() : undefined)
-      const r = (await client(args)).resource(resource)
+      const c = await client(args)
+      await resolveCustomFieldLabels(c, resource, body)
+      const r = c.resource(resource)
       try {
         print(await r.create(body, { idempotencyKey: idk }))
       } catch (e) {
@@ -435,11 +539,9 @@ const dispatchResource = async (resource: string, args: ParsedArgs): Promise<voi
       if (body === undefined) throw usage('Missing --body')
       const ifMatch = flag(args, 'if-match')
       if (!ifMatch) throw usage('Missing --if-match <etag> (run `get` first to obtain it).')
-      print(
-        await (await client(args))
-          .resource(resource)
-          .update(id, body as Record<string, unknown>, { ifMatch })
-      )
+      const c = await client(args)
+      await resolveCustomFieldLabels(c, resource, body)
+      print(await c.resource(resource).update(id, body, { ifMatch }))
       return
     }
     case 'delete': {
@@ -570,7 +672,9 @@ Conventions:
     the whole list: an existing entry absent from what you send is removed. Omit the key to
     leave the list untouched; send [] to clear it. \`get\` first and echo back what you keep.
   - custom_fields merges per key (null clears one); keys are field ids from
-    custom_field_definitions. Unaccepted body keys are silently ignored (200, no 422).
+    custom_field_definitions, or field labels (create/update resolve them).
+    Filter lists with --filter.custom_fields[<id|label>] <value>; upload attachment
+    fields with \`forz <resource> attach <id> <field> --file <path> --if-match <etag>\`. Unaccepted body keys are silently ignored (200, no 422).
   - Failed financial creates print the Idempotency-Key used on stderr; retry with the same key.
   - 429 is retried up to 3 times honoring Retry-After; 502/503/504 too, but only for GET
     or with an Idempotency-Key (never a replay that could double-apply a write).
@@ -604,6 +708,11 @@ const resourceHelp = (resource: string): void => {
   } else {
     lines.push(`  ${RESOURCE_HELP.crud}`)
     if (!NO_NOTES.has(resource)) lines.push(`  ${RESOURCE_HELP.notes}`)
+    if (ATTACHABLE_RESOURCES.has(resource))
+      lines.push(
+        '  attach <id> <field id|label> --file <path> --if-match E   upload into an attachment custom field',
+        '  attach <id> <field id|label> --clear --if-match E         clear it'
+      )
     if (FINANCIAL_RESOURCES.has(resource))
       lines.push('  create auto-sets an Idempotency-Key; override with --idempotency-key <key>')
     if (resource === 'contacts') {
