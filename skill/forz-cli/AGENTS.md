@@ -338,7 +338,7 @@ Project `user_ids` also replaces the whole team. `custom_fields` merges: only th
 change and `null` clears one. The API keys it by field `id` (`fields[].id` from
 `forz custom_field_definitions list --filter.related_name <Type>`); the CLI's `create`/`update`
 also accept the field label (case-insensitive) and resolve it to the id, e.g.
-`--body '{"custom_fields":{"Invoice Number":"INV-1"}}'`. An unknown label is a usage error
+`--body '{"custom_fields":{"Invoice Number":"INV-1"}}'`. An unknown or ambiguous (duplicate) label is a usage error
 listing the resource's fields. `raw` does not resolve labels.
 Values are typed by the field's `field_type`:
 

@@ -143,6 +143,20 @@ describe('forz CLI surface', () => {
     ).rejects.toThrow(/Unknown custom field "Nope" on sales_orders. Fields: "Tier"/)
   })
 
+  it('resolves systems labels via SystemOption and rejects ambiguous labels', async () => {
+    const defs = jest.fn().mockResolvedValue({
+      data: [
+        { parent_id: null, fields: [{ id: 'a', label: 'Size' }] },
+        { parent_id: null, fields: [{ id: 'b', label: 'size' }] },
+      ],
+    })
+    fromConfigMock.mockReturnValue({ lookup: () => ({ list: defs }), resource: () => ({}) })
+    await expect(
+      dispatch(['systems', 'list', '--filter.custom_fields[Size]', 'x', '--token', 't'])
+    ).rejects.toThrow(/ambiguous on systems \(a, b\)/)
+    expect(defs).toHaveBeenCalledWith({ related_name: 'SystemOption', limit: 100 })
+  })
+
   it('attach uploads by field label; list resolves custom_fields[<label>] filters', async () => {
     const ID = '01a0df3d-2931-7a88-b8bb-37f0baba8fad'
     const defs = jest.fn().mockResolvedValue({

@@ -161,3 +161,25 @@ describe('body envelope', () => {
     expect(bodyOf(rawSpy)).toEqual(body)
   })
 })
+
+describe('setCustomFieldAttachment', () => {
+  it('builds a multipart body with a sanitized filename and If-Match', async () => {
+    const client = new ForzClient({ token: 'fz_x' })
+    const rawSpy = jest.spyOn(client, 'raw').mockResolvedValue(stubResponse({ data: {} }))
+    const data = Buffer.from([0, 255, 13, 10])
+    await client
+      .resource('customers')
+      .setCustomFieldAttachment('c1', 'f1', { filename: 'a"\\\r\nb.bin', data }, { ifMatch: 'E' })
+    const [path, opts] = rawSpy.mock.calls[0] as [
+      string,
+      { body: Buffer; headers: Record<string, string> }
+    ]
+    expect(path).toBe('/api/v2/customers/c1/custom_fields/f1')
+    const boundary = opts.headers['Content-Type'].split('boundary=')[1]
+    const head = `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="a____b.bin"\r\nContent-Type: application/octet-stream\r\n\r\n`
+    expect(opts.body).toEqual(
+      Buffer.concat([Buffer.from(head), data, Buffer.from(`\r\n--${boundary}--\r\n`)])
+    )
+    expect(opts.headers['If-Match']).toBe('E')
+  })
+})

@@ -18,6 +18,12 @@ describe('parseArgs', () => {
     expect(r.positional).toEqual(['cmd'])
   })
 
+  it('never lets --clear swallow a positional', () => {
+    const r = parseArgs(['customers', 'attach', '--clear', 'c1', 'f1'])
+    expect(r.flags.clear).toBe(true)
+    expect(r.positional).toEqual(['customers', 'attach', 'c1', 'f1'])
+  })
+
   it('greedily consumes the next non-flag arg as value', () => {
     const r = parseArgs(['--verbose', 'cmd'])
     expect(r.flags.verbose).toBe('cmd')

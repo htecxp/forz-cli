@@ -36,7 +36,7 @@ export interface ParsedArgs {
 }
 
 /** Flags that never take a value, so `--include /path` keeps `/path` positional. */
-const BOOLEAN_FLAGS = new Set(['help', 'version', 'include'])
+const BOOLEAN_FLAGS = new Set(['help', 'version', 'include', 'clear'])
 
 // A flag's value may itself start with '-' (`--sort -created_at`, `--add "-foo"`,
 // `--body @-`); only a following `--flag` token means "no value".
@@ -181,12 +181,16 @@ const customFieldResolver = (c: ForzClient, resource: string) => {
   return async (key: string): Promise<string> => {
     if (UUID_RE.test(key)) return key
     if (!fields) {
-      // customers → Customer, sales_orders → SalesOrder (the template's related_name).
-      const relatedName = resource
-        .replace(/s$/, '')
-        .split('_')
-        .map((w) => w[0].toUpperCase() + w.slice(1))
-        .join('')
+      // customers → Customer, sales_orders → SalesOrder (the template's related_name);
+      // systems' fields live on their SystemOption's templates.
+      const relatedName =
+        resource === 'systems'
+          ? 'SystemOption'
+          : resource
+              .replace(/s$/, '')
+              .split('_')
+              .map((w) => w[0].toUpperCase() + w.slice(1))
+              .join('')
       const { data } = await c
         .lookup<CfTemplate>('custom_field_definitions')
         .list({ related_name: relatedName, limit: 100 })
@@ -194,8 +198,14 @@ const customFieldResolver = (c: ForzClient, resource: string) => {
         ...data.filter((t) => !t.parent_id).map((t) => t.fields)
       )
     }
-    const hit = fields.find((f) => f.label.trim().toLowerCase() === key.trim().toLowerCase())
-    if (hit) return hit.id
+    const hits = fields.filter((f) => f.label.trim().toLowerCase() === key.trim().toLowerCase())
+    if (hits.length === 1) return hits[0].id
+    if (hits.length > 1)
+      throw new UsageError(
+        `Custom field label "${key}" is ambiguous on ${resource} (${hits
+          .map((f) => f.id)
+          .join(', ')}); use the field id.`
+      )
     const known = fields.map((f) => `"${f.label}"`).join(', ') || 'none defined'
     throw new UsageError(`Unknown custom field "${key}" on ${resource}. Fields: ${known}`)
   }

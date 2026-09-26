@@ -178,7 +178,7 @@ export class Resource<T = Record<string, unknown>> {
     options: MutationOptions
   ): Promise<Fetched<T>> {
     const boundary = `forz-${randomUUID()}`
-    const name = file.filename.replace(/["\r\n]/g, '_')
+    const name = file.filename.replace(/["\\\r\n]/g, '_')
     const body = Buffer.concat([
       Buffer.from(
         `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${name}"\r\n` +
