@@ -40,6 +40,20 @@ describe('request retries', () => {
     expect(calls).toBe(1)
   })
 
+  it('does not replay a POST 503 without an Idempotency-Key, but does with one', async () => {
+    let calls = 0
+    handler = (_req, res) => {
+      calls++
+      res.writeHead(503, { 'Retry-After': '0' }).end()
+    }
+    await expect(request(base, '/x', { method: 'POST', body: {} })).rejects.toThrow(/503/)
+    expect(calls).toBe(1)
+    calls = 0
+    const keyed = { method: 'POST', body: {}, headers: { 'Idempotency-Key': 'k' } }
+    await expect(request(base, '/x', keyed)).rejects.toThrow(/503/)
+    expect(calls).toBe(4)
+  })
+
   it('reads Retry-After as seconds or an HTTP-date', () => {
     expect(retryDelayMs(0, '2')).toBe(2000)
     expect(retryDelayMs(0, new Date(Date.now() - 1000).toUTCString())).toBe(0)

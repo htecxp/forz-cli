@@ -85,11 +85,14 @@ const parseBody = (raw: string, contentType?: string): unknown => {
 
 const RETRY_MAX = 3
 
-/** 429/503 are always safe to retry; 502/504 only when a replay can't double-apply. */
+/**
+ * 429 is rejected before the app runs, so always safe to retry. A proxy can send
+ * 502/503/504 after the app already applied a write, so those only when a replay
+ * can't double-apply (GET/HEAD or an Idempotency-Key).
+ */
 const retryable = (status: number, method: string, idempotent: boolean): boolean =>
   status === 429 ||
-  status === 503 ||
-  ((status === 502 || status === 504) && (method === 'GET' || idempotent))
+  ([502, 503, 504].includes(status) && (method === 'GET' || method === 'HEAD' || idempotent))
 
 /** Retry-After (seconds or HTTP-date), else exponential backoff with jitter. */
 export const retryDelayMs = (attempt: number, retryAfter?: string): number => {

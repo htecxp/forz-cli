@@ -198,9 +198,10 @@ const timeoutMs = (args: ParsedArgs): number | undefined => {
   const raw = flag(args, 'timeout') ?? process.env.FORZ_TIMEOUT
   if (raw === undefined || raw === '') return undefined
   const secs = Number(raw)
-  if (!(secs > 0))
+  // setTimeout treats > 2^31-1 ms as 1 ms, so a huge value would time out instantly.
+  if (!(secs > 0) || secs > 2_147_483)
     throw new UsageError(
-      `--timeout / FORZ_TIMEOUT must be a positive number of seconds (got ${raw})`
+      `--timeout / FORZ_TIMEOUT must be a positive number of seconds up to 2147483 (got ${raw})`
     )
   return secs * 1000
 }
@@ -569,8 +570,8 @@ Conventions:
   - custom_fields merges per key (null clears one); keys are field ids from
     custom_field_definitions. Unaccepted body keys are silently ignored (200, no 422).
   - Failed financial creates print the Idempotency-Key used on stderr; retry with the same key.
-  - 429/503 are retried up to 3 times (502/504 too for GET or with an Idempotency-Key),
-    honoring Retry-After.
+  - 429 is retried up to 3 times honoring Retry-After; 502/503/504 too, but only for GET
+    or with an Idempotency-Key (never a replay that could double-apply a write).
   - Config file: ~/.forz/config.json (mode 0600)
   - Exit codes: 0 success, 1 API/network error, 2 usage error.
 `)

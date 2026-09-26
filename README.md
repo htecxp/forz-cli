@@ -76,7 +76,8 @@ The CLI enforces the Forz v2 conventions automatically:
   `Idempotency-Key`; override with `--idempotency-key <key>`. When such a create fails, the key is printed on
   stderr so you can retry it with the same body (except `409 idempotency_key.in_use`: that key was already used
   with a different body, so send the original body or use a new key).
-- **Retries & timeouts:** `429`/`503` are retried a bounded number of times, honoring `Retry-After`.
+- **Retries & timeouts:** `429` is retried a bounded number of times, honoring `Retry-After`; `502`/`503`/`504`
+  too, but only for GETs and requests with an `Idempotency-Key`, so a write is never replayed.
   Requests time out after 30s; change it with `--timeout <seconds>` or `FORZ_TIMEOUT`.
 - **Exit codes:** `0` success, `1` API/network error, `2` usage error.
 - **Errors:** the CLI surfaces RFC 9457 `application/problem+json` bodies and the stable, dotted `code` field

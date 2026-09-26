@@ -196,7 +196,7 @@ Common codes:
 
 - `validation.failed` (fix the body), `resource.not_found` (bad id).
 - `precondition.failed` (412 — stale ETag, re-`get`), `precondition.required` (428 — missing `--if-match`, only via `raw`).
-- `rate_limit.exceeded` (429 — the CLI already retried a few times honoring `Retry-After`, as it does for 503; if it still fails, wait the seconds in the error `detail`. Reads and writes have separate budgets and `forz ping` shows only the read one).
+- `rate_limit.exceeded` (429 — the CLI already retried a few times honoring `Retry-After` (it retries 502/503/504 only for GETs and keyed creates, so a failed write was not replayed); if it still fails, wait the seconds in the error `detail`. Reads and writes have separate budgets and `forz ping` shows only the read one).
 - `idempotency_key.required` (400), `idempotency_key.in_use` (409 — same key still in flight, or reused with a different body).
 - `auth.missing_token` / `auth.invalid_token` / `auth.token_revoked` / `auth.failed` (401 — key missing, wrong, revoked/rotated or expired; the user must `forz login` with a valid key).
 - `auth.scope_missing` (403 — key lacks the scope in `required_scope`; see Setup check).

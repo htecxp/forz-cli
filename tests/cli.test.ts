@@ -68,6 +68,10 @@ describe('forz CLI surface', () => {
     await expect(dispatch(['customers', 'list', '--token'])).rejects.toThrow(
       /--token requires a value \(for one starting with --, use --token=<value>\)/
     )
+    // Past setTimeout's 2^31-1 ms limit Node fires after 1 ms instead.
+    await expect(dispatch(['customers', 'list', '--timeout', '1e12'])).rejects.toBeInstanceOf(
+      UsageError
+    )
     expect(fromConfigMock).not.toHaveBeenCalled()
   })
 
