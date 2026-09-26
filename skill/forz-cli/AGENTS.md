@@ -215,6 +215,12 @@ Run `forz help` for the authoritative list. As of API version **2026-04-30**:
   `"confirmed": true`). Needs the System module (`403 auth.permission_denied` otherwise).
 - `forz <resource> --help` prints one resource's commands; `forz --version` the CLI version.
 
+**`contacts` linkage check.** `forz contacts create` prints a `# warning:` line on stderr when
+the `linkable_id` / `linkable_type` you sent are missing from the created record — **watch
+stderr on this call**, since the exit code is zero and stdout looks like a normal success.
+`update` ignores `linkable_*`; attach an orphaned contact with
+`forz contacts linkages <id> --add --body '{"linkable_type":"Customer","linkable_id":"<uuid>"}'`.
+
 Record ids are **UUID v7** strings on the wire (e.g. `0190a1b2-9c3d-7e4f-8a1b-2c3d4e5f6071`)
 — that's what you pass to `get`/`update`/`delete` and to id filters like `--filter.customer_id`.
 (The API also exposes a `customer_…`/`job_…`/`site_…` TypeID form in logs and cross-system

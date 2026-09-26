@@ -54,6 +54,11 @@ support `list | get | notes` (`notes <id>` lists comments, `notes <id> --add <te
 except `custom_field_definitions`, which also supports `get <id>`. `forz <resource> --help` shows one
 resource's commands. Contacts also have a `linkages` sub-resource (see below).
 
+> **`contacts` — check the parent linkage.** `forz contacts create` prints a stderr warning when
+> `linkable_id` / `linkable_type` you sent are missing from the created record (stdout stays clean
+> JSON, exit code zero). `PATCH` ignores those fields; attach it with
+> `forz contacts linkages <id> --add --body '{"linkable_type":"Customer","linkable_id":"<uuid>"}'`.
+
 ## API conventions baked in
 
 The CLI enforces the Forz v2 conventions automatically:

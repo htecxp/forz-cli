@@ -30,6 +30,56 @@ export const whoamiSummary = (me: MeIdentity): string => {
   return `# connected to ${account} as ${email}`
 }
 
+/**
+ * Polymorphic linkage fields `POST /api/v2/contacts` documents on
+ * `ContactCreateInput` for attaching a contact to a Customer / Lead / Site.
+ */
+const LINKAGE_FIELDS = ['linkable_id', 'linkable_type'] as const
+
+/**
+ * Warn when a contact create asked for a parent linkage the response did not
+ * come back with.
+ *
+ * The server has been observed returning HTTP 201 with both nulled (flat bodies
+ * lost the fields before create bodies were wrapped), silently orphaning the
+ * contact. PATCH ignores `linkable_*`; the fix is `contacts linkages --add`.
+ *
+ * This detects the symptom rather than asserting the server is still broken, so
+ * it goes quiet on its own once linkage is echoed back.
+ *
+ * @returns a `#`-prefixed stderr line, or undefined when there is nothing to warn about.
+ */
+export const linkageWarning = (
+  resource: string,
+  requestBody: unknown,
+  created: unknown
+): string | undefined => {
+  if (resource !== 'contacts') return undefined
+  if (!requestBody || typeof requestBody !== 'object') return undefined
+  if (!created || typeof created !== 'object') return undefined
+
+  // Accept the `{contact: {...}}` envelope as well as a flat body.
+  const raw = requestBody as Record<string, unknown>
+  const sent = (raw.contact && typeof raw.contact === 'object' ? raw.contact : raw) as Record<
+    string,
+    unknown
+  >
+  const got = created as Record<string, unknown>
+
+  const dropped = LINKAGE_FIELDS.filter((field) => {
+    const requested = sent[field]
+    if (requested === undefined || requested === null) return false
+    const returned = got[field]
+    return returned === undefined || returned === null
+  })
+  if (dropped.length === 0) return undefined
+
+  return (
+    `# warning: requested ${dropped.join(' + ')} not present on the created contact — ` +
+    `attach it with \`forz contacts linkages <id> --add --body '{"linkable_type":…,"linkable_id":…}'\``
+  )
+}
+
 export interface ParsedArgs {
   positional: string[]
   flags: Record<string, string | boolean>
@@ -529,7 +579,10 @@ const dispatchResource = async (resource: string, args: ParsedArgs): Promise<voi
       await resolveCustomFieldLabels(c, resource, body)
       const r = c.resource(resource)
       try {
-        print(await r.create(body, { idempotencyKey: idk }))
+        const created = await r.create(body, { idempotencyKey: idk })
+        print(created)
+        const warning = linkageWarning(resource, body, created)
+        if (warning) console.error(warning)
       } catch (e) {
         if (idk && e instanceof HttpError && e.code === 'idempotency_key.in_use')
           console.error(
