@@ -365,7 +365,8 @@ applied). `custom_fields` works on create too.
 
 **Filter by custom field:** `--filter.custom_fields[<field id|label>] <value>` on any list of
 customers, sites, contacts, jobs, estimates, invoices, sales_orders, items, leads, deals or
-systems. Repeat to AND several. Checkbox values are `true`/`false`, dates `YYYY-MM-DD`,
+systems. Repeat to AND several. Checkbox values are `true`/`false` (`false` matches only
+records that stored false, not ones where the field was never set), dates `YYYY-MM-DD`,
 multiselect matches records containing the value, others match exactly. An unknown field, a
 bad checkbox/date value or an attachment field is a 400 `filter.invalid`. Quote the flag in
 zsh (`'--filter.custom_fields[Tier]' Gold`), which otherwise globs the brackets.
